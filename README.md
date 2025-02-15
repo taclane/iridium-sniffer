@@ -6,10 +6,13 @@ Supports HackRF, BladeRF, USRP (UHD), and SoapySDR for live capture, or processe
 
 A built-in web map (`--web`) provides a real-time Leaflet.js visualization of decoded ring alert positions and active satellites -- no external tools or Python required.
 
+Native GSMTAP output (`--gsmtap`) sends decoded IDA (Iridium Data) frames directly to Wireshark via UDP, eliminating the need for the Python `iridium-parser.py -m gsmtap` pipeline.
+
 ## Features
 
 - Full Iridium L-band burst detection, downmix, and DQPSK demodulation pipeline
 - Direct iridium-toolkit RAW output, compatible with iridium-parser.py and reassembler.py
+- Native GSMTAP/LAPDm output to Wireshark (`--gsmtap`) for IDA frame analysis
 - Built-in web map with live satellite and ring alert visualization
 - GPU-accelerated FFT burst detection (OpenCL or Vulkan)
 - Multi-threaded architecture: detection, downmix pool, demodulation, stats
@@ -73,6 +76,40 @@ The web map runs alongside normal RAW output. Adding `--web` does not change wha
 ```bash
 ./iridium-sniffer -l --web | python3 iridium-toolkit/iridium-parser.py
 ```
+
+## GSMTAP Output (Wireshark Integration)
+
+The `--gsmtap` flag enables native IDA (Iridium Data Access) frame decoding and sends the decoded LAPDm frames to Wireshark via UDP. This replaces the `iridium-parser.py -m gsmtap` Python pipeline for protocol analysis.
+
+```bash
+# Start Wireshark listening for GSMTAP
+wireshark -k -i lo -f "udp port 4729"
+
+# In another terminal, run with GSMTAP enabled
+./iridium-sniffer -l --gsmtap
+
+# Custom destination host and port
+./iridium-sniffer -l --gsmtap=192.168.1.100:4729
+
+# Combined with web map
+./iridium-sniffer -l --web --gsmtap
+```
+
+Wireshark decodes the packets as GSM/LAPDm signaling. Typical messages seen:
+
+- **Immediate Assignment / Reject** -- channel management (most common)
+- **Paging Request** -- satellite looking for a handset (contains TMSI)
+- **Location Update Reject** -- satellite denying a registration attempt
+- **System Information** -- broadcast parameters
+- **SBD (Short Burst Data)** payloads
+
+The IDA decoder implements:
+- LCW (Link Control Word) extraction via 46-bit permutation table and 3 BCH components
+- Payload descrambling: 124-bit block de-interleave, BCH(31,20) with poly=3545
+- CRC-CCITT verification
+- Multi-burst reassembly (16 concurrent slots, frequency/time/sequence matching)
+
+GSMTAP runs alongside normal RAW output and the web map. Adding `--gsmtap` does not change stdout.
 
 **API endpoints:**
 
@@ -225,6 +262,10 @@ Detection:
 
 Web map:
     --web[=PORT]            enable live web map (default port: 8888)
+
+GSMTAP:
+    --gsmtap[=HOST:PORT]    send IDA frames as GSMTAP/LAPDm via UDP
+                             (default: 127.0.0.1:4729, for Wireshark)
 
 Output:
     --file-info=STR         file info string for RAW output (default: auto)

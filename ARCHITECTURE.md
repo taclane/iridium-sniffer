@@ -38,7 +38,7 @@ SDR / IQ File
   |  Symbol-to-bits mapping
   |  RAW format output to stdout
   |
-  +--→ [Frame Decoder]    -- inline in demod thread (when --web)
+  +--→ [Frame Decoder]    -- inline in demod thread (when --web or --gsmtap)
        |  Access code verification (DL/UL 24-bit patterns)
        |  BCH(7,3) header check (IBC detection)
        |  De-interleave: 2-way (64→2x32) and 3-way (96→3x32)
@@ -47,10 +47,21 @@ SDR / IQ File
        |  IBC: sat_id, beam_id, timeslot, Iridium time counter
        |
        +--→ [Web Map Server]   -- background thread (when --web)
-            |  HTTP server on configurable port (default 8888)
-            |  SSE stream at 1 Hz with JSON state snapshots
-            |  Embedded Leaflet.js + OpenStreetMap map page
-            |  Mutex-protected shared state (RA circular buffer, sat list)
+       |    |  HTTP server on configurable port (default 8888)
+       |    |  SSE stream at 1 Hz with JSON state snapshots
+       |    |  Embedded Leaflet.js + OpenStreetMap map page
+       |    |  Mutex-protected shared state (RA circular buffer, sat list)
+       |
+       +--→ [IDA Decoder]     -- inline in demod thread (when --gsmtap)
+            |  LCW extraction (46-bit permutation + 3 BCH components)
+            |  FT==2 → IDA frame confirmed
+            |  Payload descramble: 124-bit blocks, de-interleave, BCH(31,20)
+            |  CRC-CCITT verification
+            |  Multi-burst reassembly (16 slots, freq/time/seq matching)
+            |
+            +--→ [GSMTAP Output]  -- UDP to Wireshark (default 127.0.0.1:4729)
+                 |  16-byte GSMTAP header + LAPDm payload
+                 |  Channel number from Iridium L-band frequency
      |
 [Stats Thread]       -- 1 Hz to stderr, gr-iridium compatible format
 ```
@@ -67,6 +78,8 @@ SDR / IQ File
 | `qpsk_demod.c/h` | QPSK/DQPSK demodulator | ~250 | Port of gr-iridium `iridium_qpsk_demod_impl.cc` |
 | `frame_output.c/h` | RAW format printer | ~80 | Port of gr-iridium `iridium_frame_printer_impl.cc` |
 | `frame_decode.c/h` | Iridium frame decoder (BCH, de-interleave, IRA/IBC) | ~450 | New (based on iridium-toolkit bitsparser.py) |
+| `ida_decode.c/h` | IDA frame decoder (LCW, descramble, BCH, reassembly) | ~450 | New (based on iridium-toolkit bitsparser.py + ida.py) |
+| `gsmtap.c/h` | GSMTAP/LAPDm UDP output for Wireshark | ~100 | New |
 | `web_map.c/h` | Built-in web map (HTTP server, SSE, Leaflet.js) | ~470 | New |
 | `fir_filter.c/h` | FIR filter + tap generation (RRC, RC, LPF) | ~180 | New (replaces GR kernels) |
 | `rotator.h` | Complex frequency rotator (inline) | ~30 | New (replaces GR rotator) |
@@ -212,6 +225,7 @@ All three produce equivalent RAW output (2500-2577 lines). Minor variations are 
 - [x] Phase 9: Beyond gr-iridium (soft-decision UW rescue, +3 frames)
 - [x] Phase 10: Vulkan GPU backend (Pi5 support, tested on NVIDIA)
 - [x] Phase 11: Built-in web map (IRA/IBC frame decode, Leaflet.js map)
+- [x] Phase 12: GSMTAP output (IDA decode, LCW extraction, multi-burst reassembly, Wireshark)
 
 ## Test Verification
 
@@ -505,7 +519,10 @@ The frame decoder (`frame_decode.c`) parses demodulated bits into structured IRA
 | Polynomial | Block Length | Data Bits | Syndrome Bits | Correction | Used For |
 |-----------|-------------|-----------|---------------|------------|----------|
 | 1207 | 31 | 21 | 10 | 2-bit | IRA/IBC data blocks |
-| 29 | 7 | 3 | 4 | 1-bit | IBC header |
+| 3545 | 31 | 20 | 11 | 2-bit | IDA payload blocks |
+| 29 | 7 | 3 | 4 | 1-bit | IBC header, LCW component 1 |
+| 465 | 14 | 5 | 8 | 1-bit | LCW component 2 |
+| 41 | 26 | 21 | 5 | 2-bit | LCW component 3 |
 
 ### Web Map Server
 
@@ -530,6 +547,62 @@ The web map (`web_map.c`) is a minimal POSIX socket HTTP server that runs in a b
 | IBC frames decoded | 269 |
 | Unique satellites seen | 59 |
 | RAW output (stdout) | 2577 lines (identical with and without --web) |
+
+## Phase 12: GSMTAP Output (Wireshark Integration)
+
+### IDA Frame Decoder
+
+The IDA decoder (`ida_decode.c`) processes IDA (Iridium Data Access) frames -- the signaling channel that carries call setup, SMS, SBD, and location updates. Unlike IRA/IBC frames which use BCH(31,21), IDA frames use a different structure:
+
+**LCW (Link Control Word) extraction:**
+1. First 46 bits after access code are permuted via a fixed table
+2. Pair-swap applied before permutation (LCW table expects symbol_reverse'd input)
+3. Three BCH components decoded: lcw1 (7-bit, FT field), lcw2 (14-bit), lcw3 (26-bit)
+4. FT==2 identifies IDA frames
+
+**Payload descrambling (bits 46+ after access code):**
+1. Split into 124-bit blocks
+2. Each block: de-interleave 62 symbols into 2x62 bits
+3. Concatenate halves, split into 4x31-bit chunks
+4. Reorder as [chunk4, chunk2, chunk3, chunk1]
+5. BCH(31,20) decode each chunk (poly=3545, 2048-entry syndrome table)
+6. Extract 20 data bits per chunk
+
+**IDA fields (from BCH-decoded bitstream):**
+- Continuation flag (bit 3)
+- Sequence counter da_ctr (bits 5-7, 0-7)
+- Payload length da_len (bits 11-15, 0-20 bytes)
+- Payload data (bits 20-179, 20 bytes)
+- CRC-CCITT (bits 180-195)
+
+**Multi-burst reassembly:**
+- 16 concurrent reassembly slots (static, no allocation)
+- Match rules: same direction, frequency within 260 Hz, time within 280 ms, sequence = (prev+1)%8
+- ctr==0 + cont==0 -> single-burst message (immediate callback)
+- ctr==0 + cont==1 -> start multi-burst, accumulate payload
+- cont==0 -> message complete, fire callback
+- Timeout: slots older than 1000 ms silently discarded
+
+### GSMTAP Output
+
+GSMTAP (`gsmtap.c`) wraps reassembled IDA payloads in a 16-byte GSMTAP header and sends them as UDP datagrams to Wireshark.
+
+**GSMTAP header fields:**
+- version=2, hdr_len=4 (16 bytes), type=2 (ABIS)
+- ARFCN: Iridium channel number = (freq - 1616 MHz) / 41.667 kHz, with uplink flag 0x4000
+- signal_dbm: 20*log10(burst magnitude)
+- frame_number: raw frequency in Hz
+
+**Verification (60-second IQ recording at 10 MHz):**
+
+| Metric | iridium-sniffer | iridium-toolkit |
+|--------|-----------------|-----------------|
+| IDA frames detected | 493 | 468 |
+| CRC-OK frames | 252 | 240 |
+| GSMTAP packets sent | 225 | N/A |
+| RAW output (stdout) | 2577 lines (identical with and without --gsmtap) |
+
+Wireshark correctly decodes the packets as GSM/LAPDm signaling, showing Immediate Assignment, Location Update Reject, Paging Request, and other message types.
 
 ## Known Issues
 
