@@ -125,6 +125,8 @@ The frame decoder implements BCH(31,21) error correction with two-bit correction
 
 ## Dependencies
 
+**Note for DragonOS users:** Most dependencies listed below are pre-installed in DragonOS Noble. You may only need to install GPU support libraries (OpenCL/Vulkan) if desired.
+
 ### Minimal Build (CPU-only, file processing)
 
 For processing IQ recordings without SDR or GPU support:
@@ -225,15 +227,15 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 # Auto-detect SDR
 ./iridium-sniffer -l
 
-# Specify interface
-./iridium-sniffer -l -i hackrf-0000000000000000
-./iridium-sniffer -l -i usrp-B210-SERIAL
+# Specify interface (use --list to see your serial numbers)
+./iridium-sniffer -l -i hackrf-YOUR_SERIAL_HERE
+./iridium-sniffer -l -i usrp-B210-YOUR_SERIAL
 ./iridium-sniffer -l -i bladerf0
 ./iridium-sniffer -l -i soapy-0
 
 # With gain and bias tee
-./iridium-sniffer -l -i hackrf-0000000000000000 -B --hackrf-lna=40 --hackrf-vga=20
-./iridium-sniffer -l -i usrp-B210-SERIAL --usrp-gain=50
+./iridium-sniffer -l -B --hackrf-lna=40 --hackrf-vga=20
+./iridium-sniffer -l --usrp-gain=50
 ```
 
 ### Piping to iridium-toolkit
@@ -361,4 +363,4 @@ This project builds on the work of several open-source projects:
 - [gr-iridium](https://github.com/muccc/gr-iridium) (GPL-3.0-or-later) by Sec and schneider42 (muccc) -- the signal processing algorithms for burst detection, downmix, and QPSK demodulation are clean-room C ports of gr-iridium's GNU Radio blocks
 - [ice9-bluetooth-sniffer](https://github.com/mikeryan/ice9-bluetooth-sniffer) (GPL-2.0) by Mike Ryan / ICE9 Consulting LLC -- the SDR backend abstraction, build system, and threading infrastructure are adapted from this project
 - [VkFFT](https://github.com/DTolm/VkFFT) (MIT) by Dmitrii Tolmachev -- header-only GPU FFT library used for both OpenCL and Vulkan burst detection
-- [iridium-toolkit](https://github.com/muccc/iridium-toolkit) (BSD-2-Clause) by Sec and schneider42 -- the downstream frame parser and reassembler, and the reference for our BCH and de-interleaving implementations
+- [iridium-toolkit](https://github.com/muccc/iridium-toolkit) (BSD-2-Clause) by Sec and schneider42 -- the downstream frame parser and reassembler, and the reference implementation for BCH error correction and de-interleaving algorithms

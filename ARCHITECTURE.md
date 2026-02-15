@@ -229,7 +229,7 @@ All three produce equivalent RAW output (2500-2577 lines). Minor variations are 
 - [x] Phase 10: Vulkan GPU backend (Pi5 support, tested on NVIDIA)
 - [x] Phase 11: Built-in web map (IRA/IBC frame decode, Leaflet.js map)
 - [x] Phase 12: GSMTAP output (IDA decode, LCW extraction, multi-burst reassembly, Wireshark)
-- [x] SIMD optimization (AVX2+FMA kernels, 1.78x CPU speedup)
+- [x] Phase 13: SIMD optimization (AVX2+FMA kernels, 1.78x CPU speedup)
 
 ## Test Verification
 
@@ -354,12 +354,12 @@ Representative test results (USRP B210, 10 MHz, gain 40 dB, 30-second captures):
 
 The `ok%` in the stats line is the percentage of detected bursts that pass the **unique word check** (Hamming distance <= 2 from a known Iridium sync pattern). A lower ok% does **not** mean lower quality output -- it means the burst detector is more aggressive, attempting to demodulate weaker signals that a conservative detector would skip entirely.
 
-**Why the ok% is lower than gr-iridium but it decodes more frames:**
+**Why the ok% is lower than gr-iridium despite decoding more frames:**
 
 - gr-iridium detects ~64 bursts/s and passes 79% (= ~51 ok/s)
 - iridium-sniffer detects ~250-400 bursts/s and passes 24-36% (= ~83-95 ok/s)
 
-This tool casts a wider net. The bursts that fail UW check are silently discarded -- they never appear in the output. The bursts that pass are valid decoded frames, and yielding **~2x more of them**. The extra frames come from weaker signals at the edge of detectability that gr-iridium never even attempts.
+This tool casts a wider net. The bursts that fail UW check are silently discarded -- they never appear in the output. The bursts that pass are valid decoded frames, yielding **~2x more of them**. The extra frames come from weaker signals at the edge of detectability that gr-iridium never even attempts.
 
 **What matters for downstream tools (iridium-toolkit) is total ok/s, not ok%.** More ok/s = more decoded ACARS, SBD, pager, and voice frames.
 
@@ -423,7 +423,7 @@ Processing a 60-second IQ recording (`/tmp/iridium_iq_60s.cf32`, 10 MHz, cf32):
 - **Before:** 3668 bursts detected, 26% ok, 923 RAW lines
 - **gr-iridium:** ~3468 bursts detected, 74% ok, 2720 RAW lines
 
-Both tools detect similar burst counts, but the initial UW (unique word) pass rate was 3x lower, meaning were discarded away 74% of detected bursts during demodulation.
+Both tools detect similar burst counts, but the initial UW (unique word) pass rate was 3x lower, meaning 74% of detected bursts were discarded during demodulation.
 
 ### Root Causes (3 issues found via side-by-side comparison with gr-iridium)
 
@@ -435,7 +435,7 @@ Fix: Added a 25-tap noise-limiting LPF at output rate (250 kHz) with 20 kHz cuto
 
 **2. Single-direction UW check (secondary)**
 
-The QPSK initially demod only checked the unique word pattern for the direction chosen by burst_downmix (DL or UL). gr-iridium checks both patterns and accepts either. When burst_downmix picks the wrong direction from a noisy correlation, the PLL can still recover the correct symbols -- but they were rejected them.
+The QPSK demod initially only checked the unique word pattern for the direction chosen by burst_downmix (DL or UL). gr-iridium checks both patterns and accepts either. When burst_downmix picks the wrong direction from a noisy correlation, the PLL can still recover the correct symbols -- but they were rejected.
 
 Fix: Check both DL and UL unique words; accept either match. Update direction if demod disagrees with burst_downmix.
 
@@ -497,7 +497,7 @@ Three techniques were tested to exceed gr-iridium's 74% ok rate:
 The demod pipeline (qpsk_demod.c) is now at parity with gr-iridium -- both use identical PLL, symbol mapping, DQPSK decode, and UW patterns. The remaining gap is in the burst_downmix stage:
 
 - **Burst start detection precision** -- sub-sample timing differences in finding preamble start
-- **Filter implementation details** -- VOLK-optimized FIR vs this tool's scalar FIR may produce slightly different intermediate values due to floating-point ordering
+- **Filter implementation details** -- VOLK-optimized FIR vs SIMD FIR may produce slightly different intermediate values due to floating-point ordering
 - **Correlation peak interpolation** -- both use quadratic, but numerical differences in FFT libraries (FFTW vs GR's FFT wrapper) may shift peaks by fractions of a sample
 
 These are diminishing returns. The 5% gap represents ~143 frames over 60 seconds of recording -- marginal signals where tiny numerical differences determine whether the sync word barely passes or barely fails.

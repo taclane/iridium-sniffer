@@ -1,3 +1,13 @@
+/*
+ * Burst detection pipeline - port of gr-iridium's fft_burst_tagger_impl.cc
+ *
+ * Windowed FFT → Magnitude computation → Threshold detection → Burst aggregation
+ * with hysteresis and max-hold
+ *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 
 #define _GNU_SOURCE
 #include <complex.h>
