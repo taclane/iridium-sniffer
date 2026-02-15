@@ -84,6 +84,12 @@ int burst_detector_active_count(burst_detector_t *det);
 /* Get total detected burst count */
 uint64_t burst_detector_total_count(burst_detector_t *det);
 
+/* Get average noise floor in dBFS/Hz (for diagnostic display) */
+float burst_detector_noise_floor(burst_detector_t *det);
+
+/* Get peak signal level in dB (for diagnostic display) */
+float burst_detector_peak_signal(burst_detector_t *det);
+
 /* Destroy and free all resources */
 void burst_detector_destroy(burst_detector_t *det);
 

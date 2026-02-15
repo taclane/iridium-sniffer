@@ -325,11 +325,16 @@ Output:
 
 ## Recommended Settings
 
-**Center frequency:** 1622 MHz centers the Iridium simplex downlink band (1616-1626.5 MHz) and is the default.
+**Center frequency:** 1622 MHz (default) covers the full authorized Iridium band. With 10 MHz sample rate, this captures 1617-1627 MHz, which includes:
+- Iridium's exclusive band: 1618.725-1626.5 MHz (7.775 MHz)
+- Shared Iridium/Globalstar: 1617.775-1618.725 MHz (0.95 MHz)
+- Ring alert/simplex channels: 1626.0-1626.5 MHz
 
-**Sample rate:** 10 MHz covers the full Iridium band without processing empty spectrum. This is the default.
+Below 1617.775 MHz is Globalstar's exclusive territory. The ITU allocation extends down to 1616 MHz, but Iridium is not authorized to transmit there.
 
-**Threshold:** 18 dB is a good starting point. Lower values (14 dB) catch weaker bursts at the cost of more false detections. Higher values (22 dB) are more selective but miss marginal signals.
+**Sample rate:** 10 MHz (default) covers the full authorized Iridium band without processing empty spectrum. SDRs with 12 MHz capability can use `-r 12000000 -c 1621000000` to cover the entire ITU allocation including the unauthorized guard band, but this provides no additional Iridium signals.
+
+**Threshold:** 16 dB (default) balances sensitivity and false positives. Lower values (14 dB) catch weaker bursts at the cost of more noise. Higher values (18-20 dB) are more selective but may miss marginal signals.
 
 ## SDR Hardware
 

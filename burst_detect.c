@@ -108,6 +108,9 @@ struct _burst_detector {
     uint64_t index;             /* current absolute sample position */
     int squelch_count;
 
+    /* Diagnostic tracking */
+    float peak_signal_db;       /* maximum signal seen (for diagnostic mode) */
+
     /* IQ ringbuffer for burst sample extraction */
     float complex *ringbuf;
     size_t ringbuf_size;        /* total capacity in samples */
@@ -357,6 +360,31 @@ uint64_t burst_detector_total_count(burst_detector_t *d) {
     return d->n_tagged_bursts;
 }
 
+float burst_detector_noise_floor(burst_detector_t *d) {
+    if (!d || !d->baseline_sum || d->history_size == 0)
+        return 0.0f;
+
+    /* Average baseline across all FFT bins */
+    double sum = 0;
+    for (int i = 0; i < d->fft_size; i++)
+        sum += d->baseline_sum[i];
+
+    float avg = (float)(sum / (d->fft_size * d->history_size));
+
+    /* Convert to dBFS/Hz: 10*log10(mag^2 / bin_width) */
+    float bin_width = (float)d->sample_rate / d->fft_size;
+    if (avg > 0 && bin_width > 0)
+        return 10.0f * log10f(avg / bin_width);
+
+    return -120.0f;  /* Return very low value if no data */
+}
+
+float burst_detector_peak_signal(burst_detector_t *d) {
+    if (!d)
+        return 0.0f;
+    return d->peak_signal_db;
+}
+
 /* ---- Internal: ringbuffer operations ---- */
 
 static void ringbuf_write(burst_detector_t *d, const float complex *samples, size_t n) {
@@ -533,6 +561,10 @@ static void create_new_bursts(burst_detector_t *d) {
 
         /* Normalize relative magnitude for SNR estimate */
         b.magnitude = 10.0f * log10f(p->relative_magnitude * d->history_size * 1.72f);
+
+        /* Track peak signal for diagnostic mode */
+        if (b.magnitude > d->peak_signal_db)
+            d->peak_signal_db = b.magnitude;
 
         /* Burst might have started one FFT frame earlier */
         b.start = d->index - d->burst_pre_len;
@@ -920,6 +952,10 @@ void *burst_detector_thread(void *arg) {
     };
 
     burst_detector_t *det = burst_detector_create(&config);
+
+    /* Make detector available for diagnostic stats */
+    extern burst_detector_t *global_detector;
+    global_detector = det;
 
     while (1) {
         sample_buf_t *samples;

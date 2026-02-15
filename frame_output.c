@@ -27,6 +27,8 @@
 #include "frame_output.h"
 #include "iridium.h"
 
+extern int diagnostic_mode;
+
 static const char *out_file_info = NULL;
 static uint64_t t0 = 0;
 static int initialized = 0;
@@ -38,6 +40,10 @@ void frame_output_init(const char *fi)
 
 void frame_output_print(demod_frame_t *frame)
 {
+    /* Suppress RAW output in diagnostic mode */
+    if (diagnostic_mode)
+        return;
+
     /* Auto-initialize t0 from first frame timestamp */
     if (!initialized) {
         t0 = (frame->timestamp / 1000000000ULL) * 1000000000ULL;

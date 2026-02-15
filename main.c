@@ -110,6 +110,7 @@ int use_gpu = 0;
 
 int no_simd = 0;
 char *save_bursts_dir = NULL;
+int diagnostic_mode = 0;
 
 /* Threading state */
 volatile sig_atomic_t running = 1;
@@ -131,6 +132,9 @@ atomic_ulong stat_n_ok_bursts = 0;
 atomic_ulong stat_n_ok_sub = 0;
 atomic_ulong stat_n_dropped = 0;
 atomic_ulong stat_sample_count = 0;
+
+/* Global detector pointer for diagnostic stats (set by detector thread) */
+burst_detector_t *global_detector = NULL;
 
 /* Input file */
 FILE *in_file = NULL;
@@ -351,25 +355,64 @@ static void *stats_thread_fn(void *arg) {
         double out_ok_pct = dd > 0  ? 100.0 * ds  / dd  : 0;
         double ok_avg_pct = det > 0 ? 100.0 * sub / det : 0;
 
-        /* Print in gr-iridium format */
-        fprintf(stderr, "%ld", (long)time(NULL));
-        if (!live) {
-            double srr = (samp_rate > 0 && dt > 0) ? dsamp / (samp_rate * dt) * 100 : 0;
-            fprintf(stderr, " | srr: %5.1f%%", srr);
+        if (diagnostic_mode) {
+            /* Diagnostic mode display */
+            int runtime_sec = (int)elapsed;
+            int hours = runtime_sec / 3600;
+            int mins = (runtime_sec % 3600) / 60;
+            int secs = runtime_sec % 60;
+
+            /* Bursts per minute */
+            double burst_per_min = (elapsed > 0) ? (det * 60.0 / elapsed) : 0;
+
+            /* Get noise floor and peak signal from detector */
+            float noise_floor = global_detector ? burst_detector_noise_floor(global_detector) : -120.0f;
+            float peak_signal = global_detector ? burst_detector_peak_signal(global_detector) : 0.0f;
+            float signal_gap = peak_signal - noise_floor;
+
+            fprintf(stderr, "Runtime: %02d:%02d:%02d  |  "
+                           "Bursts: %lu detected (%.1f/min)  |  "
+                           "Decoded: %lu (ok_avg: %.0f%%)  |  "
+                           "Noise: %.1f dBFS/Hz  |  "
+                           "Peak: %.1f dB  ",
+                           hours, mins, secs,
+                           det, burst_per_min,
+                           sub, ok_avg_pct,
+                           noise_floor, peak_signal);
+
+            /* Simple status guidance */
+            if (det == 0 && elapsed > 120) {
+                fprintf(stderr, "| No bursts detected - check antenna");
+            } else if (ok_avg_pct >= 70 && burst_per_min >= 3) {
+                fprintf(stderr, "| Setup looks good (gap: %.1f dB)", signal_gap);
+            } else if (ok_avg_pct < 70 && det > 10) {
+                fprintf(stderr, "| Low decode rate - try adjusting gain");
+            } else if (ok_avg_pct >= 70 && burst_per_min < 3 && elapsed > 60) {
+                fprintf(stderr, "| Good decode rate but low burst count");
+            }
+
+            fprintf(stderr, "\n");
         } else {
-            fprintf(stderr, " | i: %3.0f/s", in_rate);
+            /* Print in gr-iridium format */
+            fprintf(stderr, "%ld", (long)time(NULL));
+            if (!live) {
+                double srr = (samp_rate > 0 && dt > 0) ? dsamp / (samp_rate * dt) * 100 : 0;
+                fprintf(stderr, " | srr: %5.1f%%", srr);
+            } else {
+                fprintf(stderr, " | i: %3.0f/s", in_rate);
+            }
+            fprintf(stderr, " | i_avg: %3.0f/s", in_rate_avg);
+            fprintf(stderr, " | q_max: %4u", q_max);
+            fprintf(stderr, " | i_ok: %3.0f%%", in_ok_pct);
+            fprintf(stderr, " | o: %4.0f/s", out_rate);
+            fprintf(stderr, " | ok: %3.0f%%", out_ok_pct);
+            fprintf(stderr, " | ok: %3.0f/s", ok_rate);
+            fprintf(stderr, " | ok_avg: %3.0f%%", ok_avg_pct);
+            fprintf(stderr, " | ok: %10lu", sub);
+            fprintf(stderr, " | ok_avg: %3.0f/s", ok_rate_avg);
+            fprintf(stderr, " | d: %lu", dropped);
+            fprintf(stderr, "\n");
         }
-        fprintf(stderr, " | i_avg: %3.0f/s", in_rate_avg);
-        fprintf(stderr, " | q_max: %4u", q_max);
-        fprintf(stderr, " | i_ok: %3.0f%%", in_ok_pct);
-        fprintf(stderr, " | o: %4.0f/s", out_rate);
-        fprintf(stderr, " | ok: %3.0f%%", out_ok_pct);
-        fprintf(stderr, " | ok: %3.0f/s", ok_rate);
-        fprintf(stderr, " | ok_avg: %3.0f%%", ok_avg_pct);
-        fprintf(stderr, " | ok: %10lu", sub);
-        fprintf(stderr, " | ok_avg: %3.0f/s", ok_rate_avg);
-        fprintf(stderr, " | d: %lu", dropped);
-        fprintf(stderr, "\n");
 
         /* Suppress unused variable warning */
         (void)dsamp;
@@ -424,6 +467,12 @@ int main(int argc, char **argv) {
 
     fprintf(stderr, "iridium-sniffer: center_freq=%.0f Hz, sample_rate=%.0f Hz, threshold=%.1f dB\n",
             center_freq, samp_rate, threshold_db);
+
+    if (diagnostic_mode) {
+        fprintf(stderr, "\nDiagnostic Mode - Setup Verification (RAW output suppressed)\n");
+        fprintf(stderr, "Target: ok_avg >70%% for good performance\n");
+        fprintf(stderr, "Press Ctrl+C to exit\n\n");
+    }
 
     fftw_lock_init();
     frame_output_init(file_info);
