@@ -4,7 +4,7 @@
  * Call simd_init() once at startup. All function pointers are then set
  * to either AVX2 or scalar implementations based on CPU capabilities.
  *
- * Copyright (c) 2025 CEMAXECUTER LLC
+ * Copyright (c) 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 

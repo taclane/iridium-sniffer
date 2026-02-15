@@ -1,5 +1,12 @@
 /*
  * Complex frequency rotator
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Complex frequency rotator
  */
 
 #ifndef __ROTATOR_H__

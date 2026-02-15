@@ -1,4 +1,12 @@
 /*
+ * Iridium frame decoder (IRA/IBC)
+ * Based on iridium-toolkit bitsparser.py (muccc)
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * Iridium frame decoder: BCH, de-interleave, IRA/IBC field extraction
  * Parses demodulated bits into structured frame data for web map display.
  */

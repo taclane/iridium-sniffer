@@ -6,6 +6,20 @@
  * BCH decodes with poly=3545, verifies CRC-CCITT, and
  * reassembles multi-burst packets.
  *
+ * Based on iridium-toolkit bitsparser.py + ida.py (muccc)
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * IDA (Iridium Data) frame decoder
+ *
+ * Detects IDA frames via LCW (Link Control Word) extraction,
+ * descrambles payload using 124-bit block de-interleaving,
+ * BCH decodes with poly=3545, verifies CRC-CCITT, and
+ * reassembles multi-burst packets.
+ *
  * Reference: iridium-toolkit bitsparser.py + ida.py (muccc)
  */
 

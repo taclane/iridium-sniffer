@@ -312,16 +312,26 @@ At low sample rates the FFT is small enough that FFTW handles it trivially. The 
 
 ## Live SDR Testing (Phase 7)
 
+### Tested Hardware
+
+Successfully tested on multiple SDR platforms at 10 MHz sample rate:
+
+- **Ettus USRP B210** (primary test platform) — 12-bit ADC, AD9361, USB 3.0, most extensive validation
+- **Nuand bladeRF 2.0 micro** — 12-bit ADC, AD9361, USB 3.0, sensitivity characteristics under investigation
+- **Airspy HydraSDR** (via SoapySDR) — 12-bit ADC, USB 3.0, tested and working
+
+Untested but supported with example configs: HackRF One, RTL-SDR (via SoapySDR)
+
 ### Setup
 
-- **SDR:** Ettus USRP B210 (USB 3.0)
-- **Antenna:** L-band antenna on RX/A with external bias tee
+- **Primary SDR:** Ettus USRP B210 (performance metrics below are from USRP captures)
 - **GPU:** NVIDIA GeForce RTX 3060 Laptop GPU (OpenCL + VkFFT)
+- **Antenna:** L-band antenna with external bias tee
 - **Center frequency:** 1622 MHz (Iridium L-band simplex downlink)
 
 ### Live Comparison: iridium-sniffer vs gr-iridium
 
-All captures at 10 MHz sample rate, USRP B210, gain 40 dB, 30-second duration:
+Representative test results (USRP B210, 10 MHz, gain 40 dB, 30-second captures):
 
 | Metric | This Tool (GPU) | This Tool (CPU) | gr-iridium |
 |--------|----------------|----------------|------------|
@@ -365,7 +375,7 @@ This tool casts a wider net. The bursts that fail UW check are silently discarde
 
 ### End-to-End Pipeline Verification
 
-Full iridium-toolkit pipeline tested (60-second capture, 10 MHz, USRP B210):
+Full iridium-toolkit pipeline tested (USRP B210, 60-second capture, 10 MHz):
 
 ```
 iridium-sniffer → iridium-parser.py → reassembler.py

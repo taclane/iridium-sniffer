@@ -1,6 +1,14 @@
 /*
  * iridium-sniffer: Standalone Iridium satellite burst detector and demodulator
  * Outputs iridium-toolkit compatible RAW format to stdout
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * iridium-sniffer: Standalone Iridium satellite burst detector and demodulator
+ * Outputs iridium-toolkit compatible RAW format to stdout
  */
 
 #define _GNU_SOURCE

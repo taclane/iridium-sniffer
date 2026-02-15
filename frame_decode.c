@@ -5,6 +5,19 @@
  * frames for web map display. Implements de-interleaving and BCH
  * syndrome checking per the Iridium air interface.
  *
+ * Based on iridium-toolkit bitsparser.py (muccc)
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Iridium frame decoder
+ *
+ * Parses demodulated bits into IRA (ring alert) and IBC (broadcast)
+ * frames for web map display. Implements de-interleaving and BCH
+ * syndrome checking per the Iridium air interface.
+ *
  * Reference: iridium-toolkit/bitsparser.py (muccc)
  */
 

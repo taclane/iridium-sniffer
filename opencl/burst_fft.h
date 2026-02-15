@@ -1,6 +1,16 @@
 /*
  * GPU-accelerated burst detection FFT
  *
+ * Backend-agnostic interface. Batches multiple FFT frames and processes
+ * them on GPU: window multiply -> forward FFT -> fftshift + magnitude squared
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * GPU-accelerated burst detection FFT
+ *
  * Backend-agnostic interface. Implemented by:
  *   - opencl/burst_fft.c  (OpenCL + VkFFT, VKFFT_BACKEND=3)
  *   - vulkan/burst_fft.c  (Vulkan + VkFFT, VKFFT_BACKEND=0)

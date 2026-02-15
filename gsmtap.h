@@ -1,5 +1,12 @@
 /*
  * GSMTAP output -- send reassembled IDA frames to Wireshark via UDP
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * GSMTAP output -- send reassembled IDA frames to Wireshark via UDP
  */
 
 #ifndef __GSMTAP_H__

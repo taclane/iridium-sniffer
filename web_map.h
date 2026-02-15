@@ -1,4 +1,11 @@
 /*
+ * Built-in web map server for Iridium ring alerts and satellites
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * Built-in web map for Iridium ring alerts and satellite tracking
  *
  * Runs a minimal HTTP server with SSE for real-time map updates.

@@ -1,4 +1,16 @@
 /*
+ * QPSK/DQPSK demodulator - port of gr-iridium's iridium_qpsk_demod_impl.cc
+ *
+ * Decimate to 1 sps → First-order PLL (alpha=0.2) → Hard-decision QPSK →
+ * Dual-direction unique word verification (DL + UL, Hamming <= 2) →
+ * DQPSK differential decode → Symbol-to-bits mapping
+ *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * QPSK/DQPSK demodulator - port of gr-iridium's iridium_qpsk_demod
  *
  * Pipeline: decimate -> PLL -> hard decision -> UW check ->

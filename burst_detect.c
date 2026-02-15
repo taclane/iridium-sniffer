@@ -1,16 +1,3 @@
-/*
- * FFT burst detector - port of gr-iridium's fft_burst_tagger_impl.cc
- *
- * Algorithm:
- *   1. Sliding FFT with Blackman window (scaled by 1/0.42 for SNR accuracy)
- *   2. Magnitude-squared, DC-shifted (fftshift)
- *   3. Adaptive noise floor via circular history buffer
- *   4. Relative magnitude = current / baseline_sum
- *   5. Peak extraction with threshold, sorted by magnitude
- *   6. Burst mask prevents duplicate detections in same frequency bin
- *   7. Burst state machine: new -> active -> gone
- *   8. Completed bursts have IQ samples extracted from ringbuffer
- */
 
 #define _GNU_SOURCE
 #include <complex.h>

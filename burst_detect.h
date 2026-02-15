@@ -1,6 +1,14 @@
 /*
  * FFT burst detector - port of gr-iridium's fft_burst_tagger
  *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * FFT burst detector - port of gr-iridium's fft_burst_tagger
+ *
  * Detects Iridium satellite bursts using sliding FFT with adaptive
  * noise floor estimation. Accumulates IQ samples per burst and pushes
  * complete burst buffers to burst_queue when burst ends.

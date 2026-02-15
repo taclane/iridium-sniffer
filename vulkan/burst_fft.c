@@ -8,6 +8,21 @@
  *
  * Uses host-visible coherent memory for zero-copy transfers.
  * Suitable for shared-memory GPUs (Pi5 VideoCore VII) and discrete GPUs.
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * GPU-accelerated burst detection FFT via Vulkan + VkFFT
+ *
+ * Pipeline per batch:
+ *   1. CPU: window multiply (write directly to mapped GPU buffer)
+ *   2. GPU: VkFFT batched forward FFT (in-place)
+ *   3. CPU: fftshift + magnitude squared (read from mapped GPU buffer)
+ *
+ * Uses host-visible coherent memory for zero-copy transfers.
+ * Suitable for shared-memory GPUs (Pi5 VideoCore VII) and discrete GPUs.
  */
 
 #ifdef USE_VULKAN

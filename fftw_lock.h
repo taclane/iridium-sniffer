@@ -1,4 +1,12 @@
 /*
+ * FFTW thread-safety wrapper
+ * FFTW plan creation is not thread-safe. All plan calls must be serialized.
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * FFTW thread-safety wrapper.
  * FFTW plan creation is not thread-safe. All plan calls must be serialized.
  * Call fftw_lock_init() before creating any threads.

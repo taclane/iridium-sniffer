@@ -1,4 +1,12 @@
 /*
+ * IDA (Iridium Data) frame decoder
+ * Based on iridium-toolkit bitsparser.py + ida.py (muccc)
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * IDA (Iridium Data) frame decoder + multi-burst reassembly
  */
 

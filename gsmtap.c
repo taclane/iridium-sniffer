@@ -4,6 +4,17 @@
  * GSMTAP is a de-facto standard for feeding GSM protocol data to
  * Wireshark. We wrap Iridium LAPDm frames in a 16-byte GSMTAP header
  * and send them as UDP to port 4729 (Wireshark's default GSMTAP port).
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * GSMTAP output -- send reassembled IDA frames to Wireshark via UDP
+ *
+ * GSMTAP is a de-facto standard for feeding GSM protocol data to
+ * Wireshark. We wrap Iridium LAPDm frames in a 16-byte GSMTAP header
+ * and send them as UDP to port 4729 (Wireshark's default GSMTAP port).
  */
 
 #include <arpa/inet.h>

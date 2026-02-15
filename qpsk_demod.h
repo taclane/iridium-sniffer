@@ -1,6 +1,14 @@
 /*
  * QPSK/DQPSK demodulator - port of gr-iridium's iridium_qpsk_demod
  *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * QPSK/DQPSK demodulator - port of gr-iridium's iridium_qpsk_demod
+ *
  * Pipeline: decimate -> PLL -> hard decision -> UW check ->
  *           DQPSK decode -> symbol-to-bits
  */

@@ -1,5 +1,12 @@
 /*
  * Iridium protocol constants
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Iridium protocol constants
  */
 
 #ifndef __IRIDIUM_H__

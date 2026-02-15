@@ -1,4 +1,12 @@
 /*
+ * Burst downmix pipeline - port of gr-iridium's burst_downmix
+ *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * Burst downmix pipeline - port of gr-iridium's burst_downmix_impl
  *
  * Per-burst processing:

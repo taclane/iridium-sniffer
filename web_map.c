@@ -4,6 +4,16 @@
  * Minimal HTTP server with SSE (Server-Sent Events) for real-time
  * map updates. Uses Leaflet.js + OpenStreetMap for visualization.
  *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Built-in web map server for Iridium ring alerts and satellites
+ *
+ * Minimal HTTP server with SSE (Server-Sent Events) for real-time
+ * map updates. Uses Leaflet.js + OpenStreetMap for visualization.
+ *
  * Two endpoints:
  *   GET /           → embedded HTML/JS map page
  *   GET /api/events → SSE stream (1 Hz JSON updates)

@@ -8,6 +8,23 @@
  *   4. fftshift + magnitude squared kernel
  *   5. Download magnitude floats back to CPU
  *
+ * Adapted from ice9-bluetooth-sniffer opencl/fft.c pattern
+ *
+ * Original work Copyright 2022 ICE9 Consulting LLC
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * GPU-accelerated burst detection FFT via OpenCL + VkFFT
+ *
+ * Pipeline per batch:
+ *   1. Upload complex float samples to GPU
+ *   2. Window multiply kernel (per-element, Blackman window)
+ *   3. VkFFT batched forward FFT (in-place)
+ *   4. fftshift + magnitude squared kernel
+ *   5. Download magnitude floats back to CPU
+ *
  * Adapted from ice9-bluetooth-sniffer opencl/fft.c pattern.
  */
 

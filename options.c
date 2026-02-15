@@ -1,4 +1,11 @@
 /*
+ * Command-line option parsing
+ *
+ * Copyright (c) 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * Command-line option parsing for iridium-sniffer
  */
 

@@ -7,7 +7,7 @@
  * Complex float layout: interleaved [re0, im0, re1, im1, ...]
  * AVX2 __m256 holds 8 floats = 4 complex values.
  *
- * Copyright (c) 2025 CEMAXECUTER LLC
+ * Copyright (c) 2026 CEMAXECUTER LLC
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 

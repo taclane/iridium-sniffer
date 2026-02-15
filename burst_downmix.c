@@ -1,4 +1,18 @@
 /*
+ * Burst downmix pipeline - port of gr-iridium's burst_downmix_impl.cc
+ *
+ * Coarse CFO correction → LPF + decimation to 250 kHz (10 sps) →
+ * Noise-limiting LPF (20 kHz cutoff) → Burst start detection →
+ * Fine CFO (squared FFT + quadratic interpolation) → RRC matched filter →
+ * FFT-based sync word correlation (DL + UL patterns) → Phase alignment →
+ * Frame extraction
+ *
+ * Original work Copyright 2020 Free Software Foundation, Inc.
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
  * Burst downmix pipeline - port of gr-iridium's burst_downmix_impl
  *
  * Each burst goes through: coarse CFO -> decimate -> find start ->

@@ -1,5 +1,14 @@
 /*
  * Frame output in iridium-toolkit RAW format
+ * Port of gr-iridium's iridium_frame_printer
+ *
+ * Original work Copyright 2021 gr-iridium author
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Frame output in iridium-toolkit RAW format
  */
 
 #ifndef __FRAME_OUTPUT_H__

@@ -1,5 +1,18 @@
 /*
  * Frame output in iridium-toolkit RAW format
+ * Port of gr-iridium's iridium_frame_printer_impl.cc
+ *
+ * Format:
+ *   RAW: {file_info} {timestamp_ms:012.4f} {freq_hz:010d} N:{mag:05.2f}{noise:+06.2f}
+ *        I:{id:011d} {conf:3d}% {level:.5f} {payload_symbols:3d} {bits...}
+ *
+ * Original work Copyright 2021 gr-iridium author
+ * Modifications Copyright 2026 CEMAXECUTER LLC
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+/*
+ * Frame output in iridium-toolkit RAW format
  *
  * Format:
  *   RAW: {file_info} {timestamp_ms:012.4f} {freq_hz:010d} N:{mag:05.2f}{noise:+06.2f}
