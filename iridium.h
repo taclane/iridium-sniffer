@@ -34,7 +34,7 @@ static const int IR_UW_UL[] = { 2, 2, 0, 0, 0, 2, 0, 0, 2, 0, 2, 2 };
 #define IR_DEFAULT_CENTER_FREQ   1622000000
 
 /* Default burst detection threshold in dB */
-#define IR_DEFAULT_THRESHOLD     18.0f
+#define IR_DEFAULT_THRESHOLD     16.0f
 
 /* Default burst width in Hz */
 #define IR_DEFAULT_BURST_WIDTH   40000

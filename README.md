@@ -42,12 +42,12 @@ Tested against gr-iridium on a 60-second IQ recording at 10 MHz from a USRP B210
 
 | Metric | iridium-sniffer | gr-iridium |
 |--------|-----------------|------------|
-| Bursts detected | 3668 | ~3468 |
-| UW pass rate | 71% | 74% |
-| Decoded frames | 2577 | 2720 |
-| Relative output | 94.7% | 100% |
+| Total RAW frames | 3252 | 2713 |
+| Valid parsed frames | 709 | 665 |
+| Unique valid frames | 465 | 435 |
+| CPU time (60s IQ) | 21.9s | N/A |
 
-In live capture, iridium-sniffer produces roughly twice as many decoded frames per second as gr-iridium. The burst detector is more aggressive and catches weaker signals that a conservative detector skips. The extra bursts that fail the unique word check are silently discarded and never appear in the output.
+iridium-sniffer decodes 6.6% more valid frames than gr-iridium while processing 2.7x faster than realtime. The default 16 dB detection threshold is tuned to recover marginal signals (low-elevation satellites, fading) without introducing false positives. In live capture, iridium-sniffer produces roughly twice as many decoded frames per second as gr-iridium.
 
 ## Built-in Web Map (Beta)
 

@@ -97,7 +97,7 @@ static void usage(int exitcode) {
 "    --soapy-gain=GAIN       SoapySDR gain in dB (default: 30)\n"
 "\n"
 "Detection options:\n"
-"    -d, --threshold=DB      burst detection threshold in dB (default: 18.0)\n"
+"    -d, --threshold=DB      burst detection threshold in dB (default: 16.0)\n"
 #ifdef USE_GPU
 "    --no-gpu                disable GPU acceleration (use CPU FFTW)\n"
 #endif

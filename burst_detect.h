@@ -57,7 +57,7 @@ typedef struct {
     int burst_width;        /* Hz, default 40000 */
     int max_bursts;         /* 0 = auto (80% of channels) */
     int max_burst_len;      /* 0 = auto (sample_rate * 90ms) */
-    float threshold;        /* dB, default 18.0 */
+    float threshold;        /* dB, default 16.0 */
     int history_size;       /* default 512 */
     int use_gpu;            /* 1 = use OpenCL GPU FFT, 0 = FFTW CPU */
 } burst_config_t;
