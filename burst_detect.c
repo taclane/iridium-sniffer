@@ -28,6 +28,7 @@
 #include "fftw_lock.h"
 #include "iridium.h"
 #include "sdr.h"
+#include "simd_kernels.h"
 #include "window_func.h"
 
 #include "blocking_queue.h"
@@ -243,18 +244,18 @@ burst_detector_t *burst_detector_create(burst_config_t *config) {
     fftw_unlock();
 
     /* Window: Blackman scaled by 1/0.42 for accurate SNR */
-    d->window = malloc(sizeof(float) * d->fft_size);
+    d->window = aligned_alloc_32(sizeof(float) * d->fft_size);
     blackman_window(d->window, d->fft_size);
     for (int i = 0; i < d->fft_size; i++)
         d->window[i] /= 0.42f;
 
-    /* Noise floor arrays */
-    d->baseline_history = calloc(d->fft_size * d->history_size, sizeof(float));
-    d->baseline_sum = calloc(d->fft_size, sizeof(float));
-    d->magnitude_shifted = calloc(d->fft_size, sizeof(float));
-    d->relative_magnitude = calloc(d->fft_size, sizeof(float));
-    d->burst_mask = malloc(sizeof(float) * d->fft_size);
-    d->ones = malloc(sizeof(float) * d->fft_size);
+    /* Noise floor arrays (aligned for SIMD) */
+    d->baseline_history = aligned_calloc_32(d->fft_size * d->history_size, sizeof(float));
+    d->baseline_sum = aligned_calloc_32(d->fft_size, sizeof(float));
+    d->magnitude_shifted = aligned_calloc_32(d->fft_size, sizeof(float));
+    d->relative_magnitude = aligned_calloc_32(d->fft_size, sizeof(float));
+    d->burst_mask = aligned_alloc_32(sizeof(float) * d->fft_size);
+    d->ones = aligned_alloc_32(sizeof(float) * d->fft_size);
 
     for (int i = 0; i < d->fft_size; i++) {
         d->burst_mask[i] = 1.0f;
@@ -401,13 +402,9 @@ static int update_filters_pre(burst_detector_t *d) {
     if (!d->history_primed)
         return 0;
 
-    /* relative_magnitude = magnitude_shifted / baseline_sum */
-    for (int i = 0; i < d->fft_size; i++) {
-        if (d->baseline_sum[i] > 0)
-            d->relative_magnitude[i] = d->magnitude_shifted[i] / d->baseline_sum[i];
-        else
-            d->relative_magnitude[i] = 0;
-    }
+    /* relative_magnitude = magnitude_shifted / baseline_sum (SIMD-accelerated) */
+    simd_relative_mag(d->magnitude_shifted, d->baseline_sum,
+                      d->relative_magnitude, d->fft_size);
     return 1;
 }
 
@@ -418,10 +415,9 @@ static void update_filters_post(burst_detector_t *d, int force) {
     if (d->num_bursts == 0 || force) {
         float *hist = d->baseline_history + d->history_index * d->fft_size;
 
-        for (int i = 0; i < d->fft_size; i++) {
-            d->baseline_sum[i] -= hist[i];
-            d->baseline_sum[i] += d->magnitude_shifted[i];
-        }
+        /* Baseline update: sum = sum - old_hist + new_mag (SIMD-accelerated) */
+        simd_baseline_update(d->baseline_sum, hist,
+                             d->magnitude_shifted, d->fft_size);
         memcpy(hist, d->magnitude_shifted, sizeof(float) * d->fft_size);
 
         d->history_index++;
@@ -643,28 +639,14 @@ static void gpu_flush_batch(burst_detector_t *d) {
 /* ---- Internal: process one FFT frame ---- */
 
 static void process_fft_frame(burst_detector_t *d, const float complex *samples) {
-    /* Apply window and copy to FFT input */
-    for (int i = 0; i < d->fft_size; i++)
-        d->fft_in[i] = samples[i] * d->window[i];
+    /* Apply window and copy to FFT input (SIMD-accelerated) */
+    simd_window_cf(samples, d->window, d->fft_in, d->fft_size);
 
     /* Execute FFT */
     fftwf_execute(d->fft_plan);
 
-    /* DC shift (fftshift): second half first, then first half */
-    int half = d->fft_size / 2;
-    for (int i = 0; i < half; i++) {
-        float re, im;
-
-        /* Bin i gets output[half + i] (positive frequencies) */
-        re = crealf(d->fft_out[half + i]);
-        im = cimagf(d->fft_out[half + i]);
-        d->magnitude_shifted[i] = re * re + im * im;
-
-        /* Bin half+i gets output[i] (negative frequencies) */
-        re = crealf(d->fft_out[i]);
-        im = cimagf(d->fft_out[i]);
-        d->magnitude_shifted[half + i] = re * re + im * im;
-    }
+    /* DC shift (fftshift) + magnitude-squared (SIMD-accelerated) */
+    simd_fftshift_mag(d->fft_out, d->magnitude_shifted, d->fft_size);
 
     /* Update filters and detect */
     if (update_filters_pre(d)) {
@@ -743,14 +725,11 @@ void burst_detector_feed(burst_detector_t *d, const int8_t *iq,
     if (num_samples > d->convert_buf_size) {
         free(d->convert_buf);
         d->convert_buf_size = num_samples;
-        d->convert_buf = malloc(sizeof(float complex) * d->convert_buf_size);
+        d->convert_buf = aligned_alloc_32(sizeof(float complex) * d->convert_buf_size);
     }
 
-    for (size_t i = 0; i < num_samples; i++) {
-        float re = iq[2 * i] / 128.0f;
-        float im = iq[2 * i + 1] / 128.0f;
-        d->convert_buf[i] = re + im * I;
-    }
+    /* int8 IQ -> float complex (SIMD-accelerated) */
+    simd_convert_i8_cf(iq, d->convert_buf, num_samples);
 
     /* Write to ringbuffer */
     ringbuf_write(d, d->convert_buf, num_samples);

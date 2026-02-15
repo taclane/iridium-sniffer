@@ -56,6 +56,7 @@ extern int usrp_gain_val;
 extern double soapy_gain_val;
 extern int bias_tee;
 extern int use_gpu;
+extern int no_simd;
 extern int web_enabled;
 extern int web_port;
 extern int gsmtap_enabled;
@@ -92,6 +93,7 @@ static void usage(int exitcode) {
 #ifdef USE_GPU
 "    --no-gpu                disable GPU acceleration (use CPU FFTW)\n"
 #endif
+"    --no-simd               disable SIMD acceleration (use scalar kernels)\n"
 "\n"
 "Web map:\n"
 "    --web[=PORT]            enable live web map (default port: 8888)\n"
@@ -142,6 +144,7 @@ void parse_options(int argc, char **argv) {
         OPT_FORMAT,
         OPT_LIST,
         OPT_NO_GPU,
+        OPT_NO_SIMD,
         OPT_WEB,
         OPT_GSMTAP,
     };
@@ -166,6 +169,7 @@ void parse_options(int argc, char **argv) {
         { "usrp-gain",      required_argument, NULL, OPT_USRP_GAIN },
         { "soapy-gain",     required_argument, NULL, OPT_SOAPY_GAIN },
         { "no-gpu",         no_argument,       NULL, OPT_NO_GPU },
+        { "no-simd",        no_argument,       NULL, OPT_NO_SIMD },
         { "web",            optional_argument, NULL, OPT_WEB },
         { "gsmtap",         optional_argument, NULL, OPT_GSMTAP },
         { NULL,             0,                 NULL, 0 }
@@ -257,6 +261,7 @@ void parse_options(int argc, char **argv) {
             case OPT_USRP_GAIN:   usrp_gain_val    = atoi(optarg); break;
             case OPT_SOAPY_GAIN:  soapy_gain_val   = atof(optarg); break;
             case OPT_NO_GPU:      use_gpu = 0;                       break;
+            case OPT_NO_SIMD:     no_simd = 1;                       break;
             case OPT_WEB:
                 web_enabled = 1;
                 if (optarg) web_port = atoi(optarg);

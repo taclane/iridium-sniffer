@@ -9,9 +9,9 @@
 # filtered LNA is recommended for best results.
 #
 # With built-in bias tee:
-#   ./iridium-sniffer -l -i bladerf0 -B --bladerf-gain=40
+#   iridium-sniffer -l -i bladerf0 -B --bladerf-gain=40
 #
 # With external bias tee:
-#   ./iridium-sniffer -l -i bladerf0 --bladerf-gain=40
+#   iridium-sniffer -l -i bladerf0 --bladerf-gain=40
 
-exec ./iridium-sniffer -l -i bladerf0 --bladerf-gain=40 --web "$@"
+exec iridium-sniffer -l -i bladerf0 --bladerf-gain=40 --web "$@"

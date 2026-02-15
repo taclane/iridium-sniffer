@@ -85,7 +85,18 @@ set(SOURCES
     ${PROJECT_SOURCE_DIR}/gsmtap.c
     ${PROJECT_SOURCE_DIR}/web_map.c
     ${PROJECT_SOURCE_DIR}/window_func.c
+    ${PROJECT_SOURCE_DIR}/simd_generic.c
 )
+
+# AVX2 SIMD kernels (x86_64 only, compiled with -mavx2 -mfma)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64|x86|i[3-6]86")
+    set_source_files_properties(${PROJECT_SOURCE_DIR}/simd_avx2.c
+        PROPERTIES COMPILE_FLAGS "-mavx2 -mfma")
+    list(APPEND SOURCES ${PROJECT_SOURCE_DIR}/simd_avx2.c)
+    message(STATUS "SIMD: AVX2 kernels enabled (runtime-detected)")
+else()
+    message(STATUS "SIMD: scalar only (non-x86 platform)")
+endif()
 
 # SDR backends
 if(LIBHACKRF_FOUND)

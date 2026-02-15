@@ -10,9 +10,9 @@
 # Too high (45 dB): ADC overload, 4x fewer bursts detected
 #
 # With external bias tee:
-#   ./iridium-sniffer -l -i soapy-0 --soapy-gain=30
+#   iridium-sniffer -l -i soapy-0 --soapy-gain=30
 #
 # With built-in bias tee (if supported):
-#   ./iridium-sniffer -l -i soapy-0 -B --soapy-gain=30
+#   iridium-sniffer -l -i soapy-0 -B --soapy-gain=30
 
-exec ./iridium-sniffer -l -i soapy-0 --soapy-gain=30 --web "$@"
+exec iridium-sniffer -l -i soapy-0 --soapy-gain=30 --web "$@"

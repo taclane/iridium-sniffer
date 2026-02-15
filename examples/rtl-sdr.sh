@@ -18,6 +18,6 @@
 # (FC0012/FC0013) do not reach L-band.
 #
 # Use a lower sample rate since the default 10 MHz exceeds RTL-SDR limits:
-#   ./iridium-sniffer -l -i soapy-0 -r 2400000 -c 1625500000 --soapy-gain=40
+#   iridium-sniffer -l -i soapy-0 -r 2400000 -c 1625500000 --soapy-gain=40
 
-exec ./iridium-sniffer -l -i soapy-0 -r 2400000 -c 1625500000 --soapy-gain=40 --web "$@"
+exec iridium-sniffer -l -i soapy-0 -r 2400000 -c 1625500000 --soapy-gain=40 --web "$@"

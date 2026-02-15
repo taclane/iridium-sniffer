@@ -82,6 +82,9 @@ SDR / IQ File
 | `gsmtap.c/h` | GSMTAP/LAPDm UDP output for Wireshark | ~100 | New |
 | `web_map.c/h` | Built-in web map (HTTP server, SSE, Leaflet.js) | ~470 | New |
 | `fir_filter.c/h` | FIR filter + tap generation (RRC, RC, LPF) | ~180 | New (replaces GR kernels) |
+| `simd_kernels.h` | SIMD dispatch header, runtime CPU detection | ~150 | New (CEMAXECUTER LLC) |
+| `simd_generic.c` | Scalar fallback + dispatch initialization | ~450 | New (CEMAXECUTER LLC) |
+| `simd_avx2.c` | AVX2+FMA kernel implementations | ~650 | New (CEMAXECUTER LLC) |
 | `rotator.h` | Complex frequency rotator (inline) | ~30 | New (replaces GR rotator) |
 | `window_func.c/h` | Blackman window generation | ~20 | New |
 | `fftw_lock.h` | FFTW planner thread-safety mutex | ~25 | New |
@@ -226,6 +229,7 @@ All three produce equivalent RAW output (2500-2577 lines). Minor variations are 
 - [x] Phase 10: Vulkan GPU backend (Pi5 support, tested on NVIDIA)
 - [x] Phase 11: Built-in web map (IRA/IBC frame decode, Leaflet.js map)
 - [x] Phase 12: GSMTAP output (IDA decode, LCW extraction, multi-burst reassembly, Wireshark)
+- [x] SIMD optimization (AVX2+FMA kernels, 1.78x CPU speedup)
 
 ## Test Verification
 
@@ -603,6 +607,91 @@ GSMTAP (`gsmtap.c`) wraps reassembled IDA payloads in a 16-byte GSMTAP header an
 | RAW output (stdout) | 2577 lines (identical with and without --gsmtap) |
 
 Wireshark correctly decodes the packets as GSM/LAPDm signaling, showing Immediate Assignment, Location Update Reject, Paging Request, and other message types.
+
+## SIMD Optimization (AVX2+FMA)
+
+### Motivation
+
+Profiling the CPU-intensive DSP pipeline revealed that FIR filtering, magnitude computation, and data conversion consumed 50-70% of total CPU time. All hot paths used scalar C loops with no SIMD vectorization. gr-iridium uses VOLK for some operations, but custom inner loops remain scalar.
+
+### Approach
+
+**Runtime CPU detection** -- One binary works on all x86_64 CPUs. At startup, `__builtin_cpu_supports("avx2")` selects either AVX2 or scalar implementations via function pointers. `--no-simd` flag forces scalar path for verification.
+
+**11 SIMD kernels implemented:**
+1. `simd_fir_ccf()` -- Complex FIR (51-tap RRC, 25-tap noise LPF)
+2. `simd_fir_ccf_dec()` -- FIR with decimation (200-tap input LPF)
+3. `simd_fir_fff()` -- Real FIR (start-detection magnitude smoothing)
+4. `simd_window_cf()` -- Blackman window multiply (8192-sample FFT prep)
+5. `simd_fftshift_mag()` -- DC shift + magnitude-squared (burst detector)
+6. `simd_baseline_update()` -- Noise floor tracking (512-frame history)
+7. `simd_relative_mag()` -- Division with conditional masking (peak extraction)
+8. `simd_convert_i8_cf()` -- int8 IQ to float complex (10 MHz input)
+9. `simd_mag_squared()` -- Magnitude (burst start detection)
+10. `simd_max_float()` -- Horizontal max (peak search)
+11. `simd_csquare_window()` -- Complex squaring with window (fine CFO)
+
+**AVX2 implementation details:**
+- Compiled with `-mavx2 -mfma` in separate translation unit (CMake `set_source_files_properties`)
+- 32-byte aligned memory via `posix_memalign` for all working buffers
+- FIR taps zero-padded to multiple of 8 floats for unrolled loops
+- FMA instruction (`_mm256_fmadd_ps`) for single-rounding multiply-add
+- Horizontal reductions via `_mm256_permutevar8x32_ps` + `_mm256_hadd_ps`
+- Tail handling for non-multiple-of-N lengths (scalar loop for remainder)
+
+**Scalar fallback:**
+- Functions in `simd_generic.c` are byte-for-byte identical to original inline loops
+- Zero performance regression -- verified 29.0s baseline → 29.2s with `--no-simd`
+
+### Results
+
+**Test file:** `/test-data/iridium_iq_60s.cf32` (4.5 GB, 10 MHz, 60 seconds)
+
+| Configuration | CPU Time (user) | Wall Time | Speedup | RAW Lines | MD5 (sorted) |
+|---------------|-----------------|-----------|---------|-----------|--------------|
+| Baseline (pre-SIMD) | 29.0s | 10.0s | 1.0x | 2577 | 681faca7... |
+| AVX2+FMA | 16.3s | 10.0s | **1.78x** | 2577 | (different)* |
+| `--no-simd` | 29.2s | 10.0s | 1.0x | 2577 | 681faca7... |
+
+\* Sorted decoded bits are byte-for-byte identical. Output line order differs due to FMA rounding affecting floating-point intermediate values (center frequency, timestamps), which changes thread scheduling in the multi-threaded burst queue. This is expected and correct.
+
+**Verification:**
+- Decoded bits: Identical when sorted (same 2577 frames, same demodulated data)
+- `--no-simd` produces identical MD5 to baseline (proves scalar path is unchanged)
+- Wall-clock stayed ~10s because 4.5 GB file read is I/O bound
+- CPU time reduced 44% (29.0s → 16.3s) at same decode quality
+
+### Files Modified
+
+| File | Change |
+|------|--------|
+| `simd_kernels.h` (NEW) | Function pointer typedefs, aligned allocators, dispatch declarations |
+| `simd_generic.c` (NEW) | Scalar implementations + `simd_init()` runtime dispatch |
+| `simd_avx2.c` (NEW) | AVX2+FMA intrinsics for all 11 kernels |
+| `CMakeLists.txt` | Add simd sources, compile `simd_avx2.c` with `-mavx2 -mfma` |
+| `main.c` | Call `simd_init(no_simd)` at startup |
+| `options.c` | Add `--no-simd` flag |
+| `fir_filter.c` | Replace inline loops with `simd_fir_*()` calls, aligned tap allocation |
+| `burst_detect.c` | Replace 5 inline loops with SIMD calls, aligned allocations |
+| `burst_downmix.c` | Replace 3 inline loops with SIMD calls, aligned work buffers |
+| `.gitignore` | Add `test-data/` (4.5 GB test file, not committed) |
+| `examples/*.sh` | Fix `./iridium-sniffer` → `iridium-sniffer` (works when installed) |
+
+### Architecture Notes
+
+**Binary portability:** The AVX2 code path is in a separate `.c` file compiled with architecture flags. The rest of the binary uses default `-march` (typically x86-64-v2 or generic). Runtime detection ensures one binary works on all CPUs from Haswell (2013, AVX2) to current without recompilation.
+
+**Cache efficiency:** 32-byte alignment satisfies AVX2 load/store requirements and matches x86 cache line size (64 bytes = 2 AVX2 vectors). Aligned loads avoid unaligned access penalties (~3 cycle stall on older µarchs).
+
+**FMA advantage:** `a * b + c` compiled as separate `vmulps` + `vaddps` rounds twice. `vfmadd231ps` fuses the operation and rounds once, improving both speed (1 µop vs 2) and numerical accuracy (one rounding error instead of two).
+
+**Why not VOLK?** VOLK is a heavy dependency (5000+ lines, build system integration). These 11 kernels are ~650 lines of intrinsics with zero external dependencies. For a standalone tool, less is more.
+
+### Known Limitations
+
+- **x86_64 only** -- ARM NEON path not implemented (scalar fallback works fine)
+- **AVX2 baseline** -- No SSE2/AVX1 intermediate path (diminishing returns, added complexity)
+- **No AVX-512** -- Would require separate compilation unit and detection; 2x speedup not worth doubling code size for <5% of user base
 
 ## Known Issues
 

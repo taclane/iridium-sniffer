@@ -5,9 +5,9 @@
 # Recommended: 40-50 dB for Iridium with external LNA
 #
 # Specify your serial with -i to avoid UHD probing all USB devices:
-#   ./iridium-sniffer -l -i usrp-B210-SERIAL --usrp-gain=50
-#   ./iridium-sniffer -l -i usrp-B205mini-SERIAL --usrp-gain=50
+#   iridium-sniffer -l -i usrp-B210-SERIAL --usrp-gain=50
+#   iridium-sniffer -l -i usrp-B205mini-SERIAL --usrp-gain=50
 #
-# Find your serial with: ./iridium-sniffer --list
+# Find your serial with: iridium-sniffer --list
 
-exec ./iridium-sniffer -l --usrp-gain=50 --web "$@"
+exec iridium-sniffer -l --usrp-gain=50 --web "$@"

@@ -21,6 +21,7 @@
 #include "fir_filter.h"
 #include "iridium.h"
 #include "rotator.h"
+#include "simd_kernels.h"
 #include "window_func.h"
 
 #include "blocking_queue.h"
@@ -346,12 +347,12 @@ burst_downmix_t *burst_downmix_create(downmix_config_t *config) {
                        32, 1,  /* UL preamble = 32 symbols */
                        &dm->ul_sync_fft, &dm->ul_sync_len);
 
-    /* ---- Working buffers (generous size) ---- */
+    /* ---- Working buffers (generous size, aligned for SIMD) ---- */
     dm->work_size = 2 * 1024 * 1024;  /* 2M samples max */
-    dm->work_a = malloc(sizeof(float complex) * dm->work_size);
-    dm->work_b = malloc(sizeof(float complex) * dm->work_size);
-    dm->mag_f = malloc(sizeof(float) * dm->work_size);
-    dm->mag_filtered_f = malloc(sizeof(float) * dm->work_size);
+    dm->work_a = aligned_alloc_32(sizeof(float complex) * dm->work_size);
+    dm->work_b = aligned_alloc_32(sizeof(float complex) * dm->work_size);
+    dm->mag_f = aligned_alloc_32(sizeof(float) * dm->work_size);
+    dm->mag_filtered_f = aligned_alloc_32(sizeof(float) * dm->work_size);
 
     return dm;
 }
@@ -430,12 +431,8 @@ static int find_burst_start(burst_downmix_t *dm, const float complex *frame,
     int mag_len = search + dm->start_fir->ntaps - 1;
     if (mag_len > frame_len) mag_len = frame_len;
 
-    /* Compute magnitude squared */
-    for (int i = 0; i < mag_len; i++) {
-        float re = crealf(frame[i]);
-        float im = cimagf(frame[i]);
-        dm->mag_f[i] = re * re + im * im;
-    }
+    /* Compute magnitude squared (SIMD-accelerated) */
+    simd_mag_squared(frame, dm->mag_f, mag_len);
 
     /* Smooth magnitude */
     int half_fir = (dm->start_fir->ntaps - 1) / 2;
@@ -445,12 +442,8 @@ static int find_burst_start(burst_downmix_t *dm, const float complex *frame,
 
     fir_filter_fff(dm->start_fir, dm->mag_filtered_f, dm->mag_f, filtered_len);
 
-    /* Find peak */
-    float max_val = 0;
-    for (int i = 0; i < filtered_len; i++) {
-        if (dm->mag_filtered_f[i] > max_val)
-            max_val = dm->mag_filtered_f[i];
-    }
+    /* Find peak (SIMD-accelerated) */
+    float max_val = simd_max_float(dm->mag_filtered_f, filtered_len);
 
     /* Find first sample above threshold */
     float threshold = START_THRESHOLD * max_val;
@@ -478,10 +471,7 @@ static float estimate_fine_cfo(burst_downmix_t *dm, const float complex *frame,
 
     /* Square the signal (removes BPSK, creates tone at 2x CFO) */
     memset(dm->cfo_fft_in, 0, dm->cfo_fft_total * sizeof(float complex));
-    for (int i = 0; i < n; i++) {
-        float complex s = frame[i];
-        dm->cfo_fft_in[i] = s * s * dm->cfo_window[i];
-    }
+    simd_csquare_window(frame, dm->cfo_window, dm->cfo_fft_in, n);
 
     /* FFT */
     fftwf_execute(dm->cfo_fft_plan);

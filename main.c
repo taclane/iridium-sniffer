@@ -40,6 +40,7 @@
 #include "ida_decode.h"
 #include "gsmtap.h"
 #include "fftw_lock.h"
+#include "simd_kernels.h"
 
 /* FFTW planner mutex (defined here, declared in fftw_lock.h) */
 pthread_mutex_t fftw_planner_mutex;
@@ -98,6 +99,8 @@ int use_gpu = 1;
 #else
 int use_gpu = 0;
 #endif
+
+int no_simd = 0;
 
 /* Threading state */
 volatile sig_atomic_t running = 1;
@@ -406,6 +409,9 @@ int main(int argc, char **argv) {
     self_pid = getpid();
 
     parse_options(argc, argv);
+
+    /* Initialize SIMD dispatch (must be before any DSP) */
+    simd_init(no_simd);
 
     fprintf(stderr, "iridium-sniffer: center_freq=%.0f Hz, sample_rate=%.0f Hz, threshold=%.1f dB\n",
             center_freq, samp_rate, threshold_db);

@@ -6,9 +6,9 @@
 # RF amplifier: +14 dB (--hackrf-amp)
 #
 # With external LNA powered via bias tee:
-#   ./iridium-sniffer -l -i hackrf-0000000000000000 -B --hackrf-lna=40 --hackrf-vga=20
+#   iridium-sniffer -l -i hackrf-0000000000000000 -B --hackrf-lna=40 --hackrf-vga=20
 #
 # Without external LNA (RF amp on for extra sensitivity):
-#   ./iridium-sniffer -l -i hackrf-0000000000000000 --hackrf-lna=40 --hackrf-vga=20 --hackrf-amp
+#   iridium-sniffer -l -i hackrf-0000000000000000 --hackrf-lna=40 --hackrf-vga=20 --hackrf-amp
 
-exec ./iridium-sniffer -l -B --hackrf-lna=40 --hackrf-vga=20 --web "$@"
+exec iridium-sniffer -l -B --hackrf-lna=40 --hackrf-vga=20 --web "$@"

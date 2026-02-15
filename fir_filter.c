@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "fir_filter.h"
+#include "simd_kernels.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -17,8 +18,14 @@
 fir_filter_t *fir_filter_create(const float *taps, int ntaps) {
     fir_filter_t *f = malloc(sizeof(*f));
     f->ntaps = ntaps;
-    f->taps = malloc(sizeof(float) * ntaps);
+    /* Allocate taps aligned to 32 bytes and zero-padded to multiple of 8
+     * for SIMD loop efficiency (no tail handling needed) */
+    int padded = pad_to_8(ntaps);
+    f->taps = aligned_alloc_32(sizeof(float) * padded);
     memcpy(f->taps, taps, sizeof(float) * ntaps);
+    /* Zero-pad remainder */
+    for (int i = ntaps; i < padded; i++)
+        f->taps[i] = 0.0f;
     return f;
 }
 
@@ -32,36 +39,20 @@ void fir_filter_destroy(fir_filter_t *f) {
 
 void fir_filter_ccf(fir_filter_t *f, float complex *out,
                     const float complex *in, int n) {
-    for (int i = 0; i < n; i++) {
-        float complex acc = 0;
-        for (int k = 0; k < f->ntaps; k++)
-            acc += f->taps[k] * in[i + k];
-        out[i] = acc;
-    }
+    simd_fir_ccf(f->taps, f->ntaps, in, out, n);
 }
 
 /* ---- Complex FIR filter with decimation ---- */
 
 void fir_filter_ccf_dec(fir_filter_t *f, float complex *out,
                         const float complex *in, int n_out, int decimation) {
-    for (int i = 0; i < n_out; i++) {
-        float complex acc = 0;
-        const float complex *p = &in[i * decimation];
-        for (int k = 0; k < f->ntaps; k++)
-            acc += f->taps[k] * p[k];
-        out[i] = acc;
-    }
+    simd_fir_ccf_dec(f->taps, f->ntaps, in, out, n_out, decimation);
 }
 
 /* ---- Real FIR filter ---- */
 
 void fir_filter_fff(fir_filter_t *f, float *out, const float *in, int n) {
-    for (int i = 0; i < n; i++) {
-        float acc = 0;
-        for (int k = 0; k < f->ntaps; k++)
-            acc += f->taps[k] * in[i + k];
-        out[i] = acc;
-    }
+    simd_fir_fff(f->taps, f->ntaps, in, out, n);
 }
 
 /* ---- sinc function ---- */
