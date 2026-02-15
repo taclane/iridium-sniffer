@@ -85,7 +85,7 @@ static void usage(int exitcode) {
 "    --hackrf-amp            enable HackRF RF amplifier\n"
 "    --bladerf-gain=GAIN     BladeRF gain in dB (default: 40)\n"
 "    --usrp-gain=GAIN        USRP gain in dB (default: 40)\n"
-"    --soapy-gain=GAIN       SoapySDR gain in dB (default: 40)\n"
+"    --soapy-gain=GAIN       SoapySDR gain in dB (default: 30)\n"
 "\n"
 "Detection options:\n"
 "    -d, --threshold=DB      burst detection threshold in dB (default: 18.0)\n"
