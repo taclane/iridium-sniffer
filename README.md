@@ -96,7 +96,7 @@ The required wisdom entries depend on sample rate. The burst detection FFT size 
 | 2-2.4 MHz (RTL-SDR) | 2048 | `fftwf-wisdom -v -o ~/.iridium-sniffer-fftw-wisdom cof2048 cof4096 cob2048` |
 | 6 MHz (Airspy Mini) | 8192 | `fftwf-wisdom -v -o ~/.iridium-sniffer-fftw-wisdom cof8192 cof4096 cof2048 cob2048` |
 | 10 MHz (default) | 8192 | `fftwf-wisdom -v -o ~/.iridium-sniffer-fftw-wisdom cof8192 cof4096 cof2048 cob2048` |
-| 20 MHz (HackRF, USRP) | 16384 | `fftwf-wisdom -v -o ~/.iridium-sniffer-fftw-wisdom cof16384 cof4096 cof2048 cob2048` |
+| 12 MHz (extended) | 16384 | `fftwf-wisdom -v -o ~/.iridium-sniffer-fftw-wisdom cof16384 cof4096 cof2048 cob2048` |
 
 The naming convention: `cof` = complex forward, `cob` = complex backward, followed by the FFT size. If running multiple sample rates on the same system, include all burst FFT sizes in one command (e.g., `cof2048 cof8192 cof4096 cob2048`). The "system-wisdom import failed" warning from `fftwf-wisdom` is normal on a fresh system and can be ignored.
 
@@ -201,7 +201,8 @@ Then open `http://localhost:8888` in a browser.
 
 The map shows:
 
-- **Ring alert positions** as colored circle markers, with color indicating the originating satellite. Click a marker for details including satellite ID, beam ID, coordinates, altitude, frequency, and TMSI (if a paging block is present).
+- **Satellite positions** as small colored circles (color = satellite ID). Each dot is a satellite's position at the time it transmitted a ring alert (IRA frame). Click for satellite ID, beam ID, coordinates, altitude, and frequency.
+- **Paging events** as larger red/gold circles. These appear when an IRA frame contains a paging block (TMSI), meaning the satellite is actively looking for a specific handset. The position is still the satellite's location, not the handset's -- the handset could be anywhere in the beam footprint.
 - **Active satellite count** and IRA/IBC frame totals in a status bar.
 - **Auto-centering** on the first received position, then free pan/zoom.
 
