@@ -49,9 +49,31 @@
 #include "gsmtap.h"
 #include "fftw_lock.h"
 #include "simd_kernels.h"
+#include <fftw3.h>
 
 /* FFTW planner mutex (defined here, declared in fftw_lock.h) */
 pthread_mutex_t fftw_planner_mutex;
+
+/* FFTW wisdom file path */
+#define FFTW_WISDOM_FILE ".iridium-sniffer-fftw-wisdom"
+
+static void fftw_load_wisdom(void) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", home, FFTW_WISDOM_FILE);
+    if (fftwf_import_wisdom_from_filename(path))
+        fprintf(stderr, "FFTW: loaded wisdom from %s\n", path);
+}
+
+static void fftw_save_wisdom(void) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", home, FFTW_WISDOM_FILE);
+    if (fftwf_export_wisdom_to_filename(path))
+        fprintf(stderr, "FFTW: saved wisdom to %s\n", path);
+}
 
 #define C_FEK_BLOCKING_QUEUE_IMPLEMENTATION
 #define C_FEK_FAIR_LOCK_IMPLEMENTATION
@@ -488,6 +510,7 @@ int main(int argc, char **argv) {
     }
 
     fftw_lock_init();
+    fftw_load_wisdom();
     frame_output_init(file_info);
 
     if (web_enabled || gsmtap_enabled)
@@ -651,6 +674,7 @@ int main(int argc, char **argv) {
     if (in_file != NULL)
         fclose(in_file);
 
+    fftw_save_wisdom();
     free(file_info);
     fprintf(stderr, "iridium-sniffer: shutdown complete\n");
     return 0;

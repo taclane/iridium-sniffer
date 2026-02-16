@@ -321,7 +321,80 @@ gpu_burst_fft_t *gpu_burst_fft_create(int fft_size, int batch_size,
         goto err_glslang;
     }
 
-    fprintf(stderr, "GPU burst FFT: %d-point, batch %d, Vulkan + VkFFT ready\n",
+    /* ---- Validation: run a test FFT to verify GPU actually works ----
+     * Some GPUs (e.g. Pi5 VideoCore VII) report Vulkan support but
+     * cannot execute VkFFT compute shaders correctly.  Run a single
+     * DC-input FFT and check the output makes sense. */
+    {
+        /* Fill first frame with DC signal: all (1.0, 0.0) */
+        for (int i = 0; i < fft_size; i++) {
+            g->mapped[2 * i]     = 1.0f;
+            g->mapped[2 * i + 1] = 0.0f;
+        }
+
+        VkCommandBufferBeginInfo tbi = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        };
+        vkResetCommandBuffer(g->command_buffer, 0);
+        vkBeginCommandBuffer(g->command_buffer, &tbi);
+
+        VkFFTLaunchParams tp = {};
+        tp.commandBuffer = &g->command_buffer;
+        tp.buffer = &g->buffer;
+        VkFFTResult tr = VkFFTAppend(&g->vkfft_app, -1, &tp);
+
+        if (tr != VKFFT_SUCCESS) {
+            fprintf(stderr, "GPU validation: VkFFT append failed (%d), disabling GPU\n", tr);
+            goto err_glslang;
+        }
+
+        vkEndCommandBuffer(g->command_buffer);
+
+        VkSubmitInfo tsi = {
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &g->command_buffer,
+        };
+
+        vk = vkQueueSubmit(g->queue, 1, &tsi, g->fence);
+        if (vk != VK_SUCCESS) {
+            fprintf(stderr, "GPU validation: submit failed (%d), disabling GPU\n", vk);
+            goto err_glslang;
+        }
+
+        /* Wait with 2-second timeout instead of forever */
+        vk = vkWaitForFences(g->device, 1, &g->fence, VK_TRUE,
+                             (uint64_t)2000000000);
+        if (vk == VK_TIMEOUT) {
+            fprintf(stderr, "GPU validation: FFT timed out (GPU compute broken), disabling GPU\n");
+            /* Device may be stuck -- skip cleanup that could hang */
+            vkDestroyInstance(g->instance, NULL);
+            free(g->window);
+            free(g);
+            return NULL;
+        }
+        if (vk != VK_SUCCESS) {
+            fprintf(stderr, "GPU validation: fence wait error (%d), disabling GPU\n", vk);
+            goto err_glslang;
+        }
+        vkResetFences(g->device, 1, &g->fence);
+
+        /* DC input FFT: bin 0 should have all the energy (re = fft_size, im = 0).
+         * Just check that bin 0 magnitude >> other bins. */
+        float dc_re = g->mapped[0];
+        float dc_im = g->mapped[1];
+        float dc_mag = dc_re * dc_re + dc_im * dc_im;
+        float expected = (float)fft_size * (float)fft_size;
+
+        if (dc_mag < expected * 0.5f || dc_mag > expected * 2.0f) {
+            fprintf(stderr, "GPU validation: DC test failed (expected ~%.0f, got %.0f), disabling GPU\n",
+                    expected, dc_mag);
+            goto err_glslang;
+        }
+    }
+
+    fprintf(stderr, "GPU burst FFT: %d-point, batch %d, VkFFT ready\n",
             fft_size, batch_size);
     return g;
 
@@ -416,7 +489,14 @@ int gpu_burst_fft_process(gpu_burst_fft_t *g, const float *input,
         return -1;
     }
 
-    vkWaitForFences(g->device, 1, &g->fence, VK_TRUE, UINT64_MAX);
+    /* 5-second timeout prevents hanging on broken GPUs */
+    vk = vkWaitForFences(g->device, 1, &g->fence, VK_TRUE,
+                         (uint64_t)5000000000);
+    if (vk != VK_SUCCESS) {
+        fprintf(stderr, "GPU: fence wait %s\n",
+                vk == VK_TIMEOUT ? "timed out" : "failed");
+        return -1;
+    }
     vkResetFences(g->device, 1, &g->fence);
 
     /* Step 3: CPU fftshift + magnitude squared */
