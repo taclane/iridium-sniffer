@@ -32,6 +32,7 @@
 #include "iridium.h"
 
 extern char *save_bursts_dir;
+extern int use_gardner;
 
 #define PLL_ALPHA           0.2f
 #define M_SQRT1_2f          0.70710678118654752f
@@ -44,10 +45,94 @@ extern char *save_bursts_dir;
 /* DQPSK transition table: maps (new - old) % 4 -> decoded symbol */
 static const int dqpsk_map[] = { 0, 2, 3, 1 };
 
-/* ---- Decimate to 1 sample per symbol ---- */
+/* Gardner TED loop filter gains.
+ * Bn*Ts ~= 0.01 (1% of symbol rate) for moderate convergence speed.
+ * Kp (proportional) and Ki (integral) derived from standard 2nd-order loop. */
+#define GARDNER_KP  0.02f
+#define GARDNER_KI  0.0002f
 
-static int decimate(const float complex *in, int n_samples,
-                    float sps, float complex *out)
+/* ---- Cubic interpolation of complex samples ---- */
+
+static float complex cubic_interp(const float complex *in, int n_samples,
+                                   float pos)
+{
+    int idx = (int)pos;
+    float mu = pos - idx;
+
+    /* Clamp to valid range with enough margin for cubic */
+    if (idx < 1) idx = 1;
+    if (idx >= n_samples - 2) idx = n_samples - 3;
+
+    float complex s0 = in[idx - 1];
+    float complex s1 = in[idx];
+    float complex s2 = in[idx + 1];
+    float complex s3 = in[idx + 2];
+
+    /* Catmull-Rom spline */
+    float mu2 = mu * mu;
+    float mu3 = mu2 * mu;
+
+    float complex a = -0.5f*s0 + 1.5f*s1 - 1.5f*s2 + 0.5f*s3;
+    float complex b =      s0 - 2.5f*s1 + 2.0f*s2 - 0.5f*s3;
+    float complex c = -0.5f*s0           + 0.5f*s2;
+    float complex d =                 s1;
+
+    return a*mu3 + b*mu2 + c*mu + d;
+}
+
+/* ---- Gardner timing error detector with interpolation ---- */
+
+static int decimate_gardner(const float complex *in, int n_samples,
+                            float sps, float complex *out)
+{
+    int n = 0;
+    float pos = 0.0f;           /* current sampling position (fractional) */
+    float timing_offset = 0.0f; /* integral accumulator */
+    float complex prev_sym = 0; /* previous on-time sample */
+
+    while (pos < n_samples - 3) {
+        /* On-time sample via cubic interpolation */
+        float complex on_time = cubic_interp(in, n_samples, pos);
+        out[n] = on_time;
+
+        if (n > 0) {
+            /* Mid-point sample (halfway between previous and current) */
+            float mid_pos = pos - sps * 0.5f;
+            if (mid_pos >= 1.0f) {
+                float complex mid = cubic_interp(in, n_samples, mid_pos);
+
+                /* Gardner TED error: Re{(prev - current) * conj(mid)} */
+                float complex diff = prev_sym - on_time;
+                float error = crealf(diff * conjf(mid));
+
+                /* Clamp error to prevent instability */
+                if (error > 1.0f) error = 1.0f;
+                if (error < -1.0f) error = -1.0f;
+
+                /* PI loop filter */
+                timing_offset += GARDNER_KI * error;
+                float adjust = GARDNER_KP * error + timing_offset;
+
+                /* Limit adjustment to +/- 0.5 samples per symbol */
+                if (adjust > 0.5f) adjust = 0.5f;
+                if (adjust < -0.5f) adjust = -0.5f;
+
+                pos += adjust;
+            }
+        }
+
+        prev_sym = on_time;
+        n++;
+        pos += sps;
+    }
+
+    return n;
+}
+
+/* ---- Simple decimation (legacy fallback) ---- */
+
+static int decimate_simple(const float complex *in, int n_samples,
+                           float sps, float complex *out)
 {
     int n = 0;
     for (int i = 0; i < n_samples; i += (int)sps)
@@ -323,8 +408,13 @@ int qpsk_demod(downmix_frame_t *in, demod_frame_t **out)
     }
 
     /* Step 1: Decimate to 1 sample per symbol */
-    int n_symbols = decimate(in->samples, (int)in->num_samples,
-                             in->samples_per_symbol, decimated);
+    int n_symbols;
+    if (use_gardner)
+        n_symbols = decimate_gardner(in->samples, (int)in->num_samples,
+                                     in->samples_per_symbol, decimated);
+    else
+        n_symbols = decimate_simple(in->samples, (int)in->num_samples,
+                                    in->samples_per_symbol, decimated);
 
     /* Step 2: PLL phase correction */
     float total_phase = qpsk_pll(decimated, pll_out, n_symbols, PLL_ALPHA);

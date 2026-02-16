@@ -111,6 +111,7 @@ int use_gpu = 0;
 int no_simd = 0;
 char *save_bursts_dir = NULL;
 int diagnostic_mode = 0;
+int use_gardner = 0;
 
 /* Threading state */
 volatile sig_atomic_t running = 1;

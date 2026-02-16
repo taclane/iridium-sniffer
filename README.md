@@ -49,6 +49,8 @@ Tested against gr-iridium on a 60-second IQ recording at 10 MHz from a USRP B210
 
 iridium-sniffer decodes 6.6% more valid frames than gr-iridium while processing 2.7x faster than realtime. The default 16 dB detection threshold is tuned to recover marginal signals (low-elevation satellites, fading) without introducing false positives. In live capture, iridium-sniffer produces roughly twice as many decoded frames per second as gr-iridium.
 
+The frame decoder implements BCH(31,21) error correction with two-bit correction capability, three-way and two-way de-interleaving, and field extraction for IRA (satellite position, beam, paging TMSIs) and IBC (satellite ID, beam, Iridium time counter) frames. From a 60-second recording, it typically decodes 150+ ring alerts and 250+ broadcast frames across 50-60 unique satellites.
+
 ## Built-in Web Map (Beta)
 
 The `--web` flag starts an embedded HTTP server that decodes IRA (ring alert) and IBC (broadcast) frames in real time and displays them on a map. This provides similar functionality to [Iridium Live](https://github.com/microp11/iridium-live) without any external dependencies.
@@ -72,6 +74,14 @@ The map shows:
 - **Auto-centering** on the first received position, then free pan/zoom.
 
 Data updates once per second via Server-Sent Events. The map uses Leaflet.js with OpenStreetMap tiles, loaded from CDN. No files need to be installed or served separately.
+
+**API endpoints:**
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | HTML map page |
+| `GET /api/events` | SSE stream (1 Hz JSON updates) |
+| `GET /api/state` | JSON snapshot of current state |
 
 The web map runs alongside normal RAW output. Adding `--web` does not change what appears on stdout, so you can pipe to iridium-toolkit at the same time:
 
@@ -137,16 +147,6 @@ The `--save-bursts` option saves IQ samples from successfully decoded bursts to 
 - Regression testing with real satellite data
 
 Captured IQ is at 250 kHz sample rate, 10 samples per symbol, after RRC matched filtering. Each file contains one complete burst ready for demodulation.
-
-**API endpoints:**
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /` | HTML map page |
-| `GET /api/events` | SSE stream (1 Hz JSON updates) |
-| `GET /api/state` | JSON snapshot of current state |
-
-The frame decoder implements BCH(31,21) error correction with two-bit correction capability, three-way and two-way de-interleaving, and field extraction for IRA (satellite position, beam, paging TMSIs) and IBC (satellite ID, beam, Iridium time counter) frames. From a 60-second recording, it typically decodes 150+ ring alerts and 250+ broadcast frames across 50-60 unique satellites.
 
 ## Dependencies
 

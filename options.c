@@ -71,6 +71,7 @@ extern int gsmtap_enabled;
 extern char *gsmtap_host;
 extern int gsmtap_port;
 extern int diagnostic_mode;
+extern int use_gardner;
 
 static void usage(int exitcode) {
     fprintf(stderr,
@@ -115,6 +116,7 @@ static void usage(int exitcode) {
 "    --file-info=STR         file info string for output (default: auto)\n"
 "    --save-bursts=DIR       save IQ samples of decoded bursts to directory\n"
 "    --diagnostic            setup verification mode (suppresses RAW output)\n"
+"    --gardner              use Gardner timing recovery (improves weak bursts)\n"
 "    -v, --verbose           verbose output to stderr\n"
 "    -h, --help              show this help\n"
 "    --list                  list available SDR interfaces\n"
@@ -160,6 +162,7 @@ void parse_options(int argc, char **argv) {
         OPT_GSMTAP,
         OPT_SAVE_BURSTS,
         OPT_DIAGNOSTIC,
+        OPT_GARDNER,
     };
 
     static const struct option longopts[] = {
@@ -187,6 +190,7 @@ void parse_options(int argc, char **argv) {
         { "gsmtap",         optional_argument, NULL, OPT_GSMTAP },
         { "save-bursts",    required_argument, NULL, OPT_SAVE_BURSTS },
         { "diagnostic",     no_argument,       NULL, OPT_DIAGNOSTIC },
+        { "gardner",        no_argument,       NULL, OPT_GARDNER },
         { NULL,             0,                 NULL, 0 }
     };
 
@@ -302,6 +306,10 @@ void parse_options(int argc, char **argv) {
 
             case OPT_DIAGNOSTIC:
                 diagnostic_mode = 1;
+                break;
+
+            case OPT_GARDNER:
+                use_gardner = 1;
                 break;
 
             case 'h':
