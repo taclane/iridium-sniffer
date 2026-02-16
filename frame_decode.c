@@ -432,44 +432,56 @@ int frame_decode(const demod_frame_t *frame, decoded_frame_t *out)
 
     /* ---- Try IBC detection ----
      * Header: 6 bits BCH(7,3), then 64-bit de-interleaved data blocks.
-     * Detection: strict zero-syndrome on header + first data blocks. */
+     * Detection: BCH correction on header + first data blocks. */
     if (data_len >= 6 + 64) {
-        /* Check IBC header (BCH(7,3), strict zero-syndrome) */
+        /* Check IBC header (BCH(7,3) with error correction) */
         uint32_t hdr_val = bits_to_uint(data, 6);
         uint32_t hdr_syn = gf2_remainder(BCH_POLY_HDR, hdr_val);
+        int hdr_ok = 0;
 
         if (hdr_syn == 0) {
+            hdr_ok = 1;
+        } else if (hdr_syn < 16 && syn_hdr[hdr_syn].errs >= 0) {
+            hdr_val ^= syn_hdr[hdr_syn].locator;
+            hdr_ok = 1;
+        }
+
+        if (hdr_ok) {
             uint8_t hdr_data[3];
             uint_to_bits(hdr_val >> 4, hdr_data, 3);
 
             /* De-interleave first 64-bit block after header */
             uint8_t di1[32], di2[32];
+            float li1[32], li2[32];
             de_interleave(data + 6, di1, di2);
+            if (data_llr && data_len >= 6 + 64)
+                de_interleave_llr(data_llr + 6, li1, li2);
 
-            /* Strict zero-syndrome on both data blocks */
-            uint32_t ds1 = gf2_remainder(BCH_POLY_RA, bits_to_uint(di1, 31));
-            uint32_t ds2 = gf2_remainder(BCH_POLY_RA, bits_to_uint(di2, 31));
+            /* BCH correction on first data blocks */
+            uint8_t d1[BCH_RA_DATA], d2[BCH_RA_DATA];
+            uint8_t rc1[10], rc2[10];
+            int e1 = chase_bch_decode_p(di1,
+                        data_llr ? li1 : NULL, d1, rc1);
+            int e2 = chase_bch_decode_p(di2,
+                        data_llr ? li2 : NULL, d2, rc2);
 
-            if (ds1 == 0 && ds2 == 0) {
+            if (e1 >= 0 && e2 >= 0 &&
+                check_parity32(di1, d1, BCH_RA_DATA, rc1, 10) &&
+                check_parity32(di2, d2, BCH_RA_DATA, rc2, 10)) {
                 /* IBC confirmed -- decode all blocks */
                 int bc_type = extract_uint(hdr_data, 3);
                 int ibc_max = 262;
                 if (data_len < ibc_max) ibc_max = data_len;
 
-                uint8_t d1[BCH_RA_DATA], d2[BCH_RA_DATA];
                 uint8_t bch_stream[256];
                 int bch_len = 0;
 
-                uint_to_bits(bits_to_uint(di1, 31) >> 10, d1, BCH_RA_DATA);
-                uint_to_bits(bits_to_uint(di2, 31) >> 10, d2, BCH_RA_DATA);
                 memcpy(bch_stream + bch_len, d1, BCH_RA_DATA);
                 bch_len += BCH_RA_DATA;
                 memcpy(bch_stream + bch_len, d2, BCH_RA_DATA);
                 bch_len += BCH_RA_DATA;
 
                 /* Remaining 64-bit blocks with Chase BCH + parity */
-                uint8_t rc1[10], rc2[10];
-                float li1[32], li2[32];
                 int offset = 6 + 64;
                 while (offset + 64 <= ibc_max && bch_len + 2 * BCH_RA_DATA <= (int)sizeof(bch_stream)) {
                     de_interleave(data + offset, di1, di2);
@@ -498,31 +510,48 @@ int frame_decode(const demod_frame_t *frame, decoded_frame_t *out)
 
     /* ---- Try IRA detection ----
      * First 96 bits: de_interleave3 → 3 × 32-bit blocks.
-     * Detection: strict zero-syndrome on all 3 header blocks (no error
-     * correction). This matches iridium-toolkit's default mode and
-     * gives a negligible false-positive rate (~1e-9). BCH correction
-     * is still used for the paging data blocks that follow. */
+     * Detection: Chase BCH correction on all 3 header blocks + parity.
+     * BCH(31,21) t=2 corrects up to 2 errors per block; Chase extends
+     * this with soft info. Three-block parity gate keeps false-positive
+     * rate negligible even with correction enabled. */
     if (data_len >= 96) {
         uint8_t ra1[32], ra2[32], ra3[32];
+        float la1[32], la2[32], la3[32];
         de_interleave3(data, ra1, ra2, ra3);
 
-        /* Strict zero-syndrome check on all 3 header blocks */
-        uint32_t s1 = gf2_remainder(BCH_POLY_RA, bits_to_uint(ra1, 31));
-        uint32_t s2 = gf2_remainder(BCH_POLY_RA, bits_to_uint(ra2, 31));
-        uint32_t s3 = gf2_remainder(BCH_POLY_RA, bits_to_uint(ra3, 31));
+        /* De-interleave LLR if available (for Chase decoder) */
+        if (data_llr) {
+            int p1 = 0, p2 = 0, p3 = 0;
+            for (int s = 47; s >= 2; s -= 3) {
+                la1[p1++] = data_llr[2 * s];
+                la1[p1++] = data_llr[2 * s + 1];
+            }
+            for (int s = 46; s >= 1; s -= 3) {
+                la2[p2++] = data_llr[2 * s];
+                la2[p2++] = data_llr[2 * s + 1];
+            }
+            for (int s = 45; s >= 0; s -= 3) {
+                la3[p3++] = data_llr[2 * s];
+                la3[p3++] = data_llr[2 * s + 1];
+            }
+        }
 
-        if (s1 == 0 && s2 == 0 && s3 == 0) {
-            /* Extract data bits from the clean header blocks */
-            uint8_t d1[BCH_RA_DATA], d2[BCH_RA_DATA], d3[BCH_RA_DATA];
-            uint_to_bits(bits_to_uint(ra1, 31) >> 10, d1, BCH_RA_DATA);
-            uint_to_bits(bits_to_uint(ra2, 31) >> 10, d2, BCH_RA_DATA);
-            uint_to_bits(bits_to_uint(ra3, 31) >> 10, d3, BCH_RA_DATA);
+        /* Chase BCH correction on all 3 header blocks */
+        uint8_t d1[BCH_RA_DATA], d2[BCH_RA_DATA], d3[BCH_RA_DATA];
+        uint8_t c1[10], c2[10], c3[10];
+        int e1 = chase_bch_decode_p(ra1, data_llr ? la1 : NULL, d1, c1);
+        int e2 = chase_bch_decode_p(ra2, data_llr ? la2 : NULL, d2, c2);
+        int e3 = chase_bch_decode_p(ra3, data_llr ? la3 : NULL, d3, c3);
+
+        if (e1 >= 0 && e2 >= 0 && e3 >= 0 &&
+            check_parity32(ra1, d1, BCH_RA_DATA, c1, 10) &&
+            check_parity32(ra2, d2, BCH_RA_DATA, c2, 10) &&
+            check_parity32(ra3, d3, BCH_RA_DATA, c3, 10)) {
 
             /* IRA confirmed -- assemble decoded data */
             uint8_t bch_stream[512];
             int bch_len = 0;
 
-            /* First 3 blocks (already decoded above) */
             memcpy(bch_stream + bch_len, d1, BCH_RA_DATA);
             bch_len += BCH_RA_DATA;
             memcpy(bch_stream + bch_len, d2, BCH_RA_DATA);
