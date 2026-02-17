@@ -587,14 +587,15 @@ int main(int argc, char **argv) {
         }
 #endif
 #ifdef HAVE_HACKRF
-        if (!sdr_started) {
+        if (!sdr_started && serial != NULL) {
             hackrf = hackrf_setup();
             hackrf_start_rx(hackrf, hackrf_rx_cb, NULL);
             sdr_started = 1;
         }
 #endif
         if (!sdr_started)
-            errx(1, "No SDR backend available (none compiled in or none selected)");
+            errx(1, "No SDR selected. Use -i to specify a device "
+                 "(e.g. -i soapy-0, -i hackrf-SERIAL, -i bladerf0, -i usrp-SERIAL)");
     } else if (in_file != NULL) {
         pthread_create(&spewer, NULL, spewer_thread, in_file);
 #ifdef __linux__
