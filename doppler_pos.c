@@ -17,6 +17,8 @@
 #include "wgs84.h"
 #include "gsmtap.h"  /* IR_BASE_FREQ, IR_CHANNEL_WIDTH */
 
+extern int verbose;
+
 /* ---- Configuration ---- */
 
 #define MAX_SATELLITES       128
@@ -28,6 +30,7 @@
 #define OUTLIER_SIGMA        3.0     /* residual rejection threshold */
 #define MAX_MEAS_AGE_NS      (30ULL * 60 * 1000000000ULL)  /* 30 min */
 #define MIN_VEL_INTERVAL_NS  (2ULL * 1000000000ULL)         /* 2 sec */
+#define MAX_SAT_CLUSTER_DIST 8000e3   /* max 3D ECEF distance between visible sats (m) */
 
 /* ---- Internal types ---- */
 
@@ -295,11 +298,6 @@ void doppler_pos_add_measurement(const ira_data_t *ira, double frequency,
     double r = vec3_norm(sat_ecef);
     if (r < 7050e3 || r > 7250e3) {
         dbg_radius++;
-        if (dbg_radius <= 20)
-            fprintf(stderr, "DOPPLER_DBG: rejected radius=%.0f km "
-                    "xyz=[%d,%d,%d] sat=%d\n",
-                    r / 1000.0, ira->pos_xyz[0], ira->pos_xyz[1],
-                    ira->pos_xyz[2], ira->sat_id);
         goto dbg_print;
     }
 
@@ -327,19 +325,18 @@ void doppler_pos_add_measurement(const ira_data_t *ira, double frequency,
     }
     pthread_mutex_unlock(&pos_lock);
 
-    {
+    if (verbose) {
         double slat, slon, salt;
         ecef_to_geodetic(sat_ecef, &slat, &slon, &salt);
-        if (dbg_ok < 50)
-            fprintf(stderr, "DOPPLER_DBG: ACCEPTED sat=%d pos=%.1f,%.1f "
-                    "alt=%.0fkm freq=%.0f\n",
-                    ira->sat_id, slat, slon, salt/1000.0, frequency);
+        fprintf(stderr, "DOPPLER: accepted sat=%d pos=%.1f,%.1f "
+                "alt=%.0fkm freq=%.0f\n",
+                ira->sat_id, slat, slon, salt/1000.0, frequency);
     }
     dbg_ok++;
 
 dbg_print:
-    if (dbg_total % 25 == 0)
-        fprintf(stderr, "DOPPLER_DBG: ira_total=%lu ok=%lu "
+    if (verbose && dbg_total % 50 == 0)
+        fprintf(stderr, "DOPPLER: ira_total=%lu ok=%lu "
                 "reject_sat0=%lu reject_coord=%lu reject_radius=%lu "
                 "reject_vel=%lu\n",
                 dbg_total, dbg_ok, dbg_sat0, dbg_coord, dbg_radius,
@@ -367,7 +364,140 @@ int doppler_pos_solve(doppler_solution_t *out)
         }
     }
 
+    /* Spatial visibility filter: cluster satellites by proximity.
+     * All satellites visible from a single receiver are within ~6000 km
+     * ground distance, which corresponds to ~8000 km in 3D ECEF at orbit
+     * altitude. Corrupted IRA positions (valid altitude, wrong lat/lon)
+     * place satellites on the opposite side of the planet (>12000 km away).
+     *
+     * Key insight: only consider satellites with demonstrated orbital motion
+     * (valid velocity estimates). Real satellites move at ~7.5 km/s so their
+     * positions change between IRA frames. Corrupted decodes tend to report
+     * the same wrong position repeatedly (zero apparent motion), which fails
+     * the velocity estimation. This filters them before clustering. */
+    int sat_keep[MAX_SATELLITES] = {0};
+    {
+        double sat_pos[MAX_SATELLITES][3];
+        int sat_has_motion[MAX_SATELLITES] = {0};
+        int n_with_motion = 0;
+        int vel_usable[MAX_SATELLITES] = {0};  /* count of velocity-valid meas */
+
+        for (int s = 0; s < n_satellites; s++) {
+            if (satellites[s].count < 2) continue;
+
+            /* Check if this satellite has any measurement with a valid
+             * velocity estimate (proves it's actually moving in orbit) */
+            int latest_vel_idx = -1;
+            for (int i = satellites[s].count - 1; i >= 0; i--) {
+                sat_meas_t *m = sat_buf_get(&satellites[s], i);
+                if (!m || !m->valid) continue;
+                if (now > 0 && now - m->timestamp > MAX_MEAS_AGE_NS) continue;
+                double vel[3];
+                if (estimate_velocity(&satellites[s], i, vel) == 0) {
+                    vel_usable[s]++;
+                    if (latest_vel_idx < 0) latest_vel_idx = i;
+                }
+            }
+
+            if (latest_vel_idx >= 0) {
+                sat_meas_t *m = sat_buf_get(&satellites[s], latest_vel_idx);
+                sat_pos[s][0] = m->sat_ecef[0];
+                sat_pos[s][1] = m->sat_ecef[1];
+                sat_pos[s][2] = m->sat_ecef[2];
+                sat_has_motion[s] = 1;
+                n_with_motion++;
+            }
+        }
+
+        if (n_with_motion >= 3) {
+            /* Count mutual neighbors among motion-validated satellites */
+            int neighbors[MAX_SATELLITES] = {0};
+            for (int i = 0; i < n_satellites; i++) {
+                if (!sat_has_motion[i]) continue;
+                for (int j = i + 1; j < n_satellites; j++) {
+                    if (!sat_has_motion[j]) continue;
+                    double d[3];
+                    vec3_sub(sat_pos[i], sat_pos[j], d);
+                    if (vec3_norm(d) < MAX_SAT_CLUSTER_DIST) {
+                        neighbors[i]++;
+                        neighbors[j]++;
+                    }
+                }
+            }
+
+            /* Find cluster core: most neighbors, break ties by number
+             * of velocity-usable measurements (not raw buffer count) */
+            int core = -1;
+            int max_nb = -1;
+            int max_vel = -1;
+            for (int s = 0; s < n_satellites; s++) {
+                if (!sat_has_motion[s]) continue;
+                if (neighbors[s] > max_nb ||
+                    (neighbors[s] == max_nb &&
+                     vel_usable[s] > max_vel)) {
+                    max_nb = neighbors[s];
+                    max_vel = vel_usable[s];
+                    core = s;
+                }
+            }
+
+            /* Keep all motion-validated satellites within threshold of core.
+             * Also keep satellites without motion proof if they have recent
+             * measurements (newcomers that haven't accumulated enough for
+             * velocity yet) and are near the cluster. */
+            if (core >= 0) {
+                sat_keep[core] = 1;
+                for (int s = 0; s < n_satellites; s++) {
+                    if (s == core) continue;
+                    if (!sat_has_motion[s]) {
+                        /* Newcomer: get its latest position and check distance */
+                        for (int i = satellites[s].count - 1; i >= 0; i--) {
+                            sat_meas_t *m = sat_buf_get(&satellites[s], i);
+                            if (!m || !m->valid) continue;
+                            if (now > 0 && now - m->timestamp > MAX_MEAS_AGE_NS)
+                                continue;
+                            double d[3];
+                            vec3_sub(m->sat_ecef, sat_pos[core], d);
+                            if (vec3_norm(d) < MAX_SAT_CLUSTER_DIST)
+                                sat_keep[s] = 1;
+                            break;
+                        }
+                        continue;
+                    }
+                    double d[3];
+                    vec3_sub(sat_pos[s], sat_pos[core], d);
+                    double dist = vec3_norm(d);
+                    if (dist < MAX_SAT_CLUSTER_DIST) {
+                        sat_keep[s] = 1;
+                    } else if (verbose) {
+                        double slat, slon, salt;
+                        ecef_to_geodetic(sat_pos[s], &slat, &slon, &salt);
+                        fprintf(stderr, "DOPPLER: visibility reject "
+                                "sat=%d pos=%.1f,%.1f (%.0fkm from core "
+                                "sat=%d)\n", satellites[s].sat_id, slat, slon,
+                                dist / 1000.0, satellites[core].sat_id);
+                    }
+                }
+            }
+        } else {
+            /* Not enough motion-validated satellites to cluster;
+             * keep all that have recent measurements */
+            for (int s = 0; s < n_satellites; s++) {
+                if (satellites[s].count == 0) continue;
+                for (int i = satellites[s].count - 1; i >= 0; i--) {
+                    sat_meas_t *m = sat_buf_get(&satellites[s], i);
+                    if (m && m->valid &&
+                        (now == 0 || now - m->timestamp <= MAX_MEAS_AGE_NS)) {
+                        sat_keep[s] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     for (int s = 0; s < n_satellites; s++) {
+        if (!sat_keep[s]) continue;
         int sat_contributed = 0;
 
         for (int i = 0; i < satellites[s].count; i++) {
@@ -405,24 +535,15 @@ int doppler_pos_solve(doppler_solution_t *out)
 done_collect:
 
     /* Debug: show buffer state vs usable measurements */
-    {
-        int total_buf = 0, vel_fail = 0;
-        for (int s = 0; s < n_satellites; s++) {
+    if (verbose) {
+        int total_buf = 0;
+        for (int s = 0; s < n_satellites; s++)
             total_buf += satellites[s].count;
-            for (int i = 0; i < satellites[s].count; i++) {
-                sat_meas_t *m = sat_buf_get(&satellites[s], i);
-                if (!m || !m->valid) continue;
-                if (now > 0 && now - m->timestamp > MAX_MEAS_AGE_NS) continue;
-                double vel[3];
-                if (estimate_velocity(&satellites[s], i, vel) != 0)
-                    vel_fail++;
-            }
-        }
         static int solve_dbg_cnt = 0;
-        if (solve_dbg_cnt++ % 30 == 0)
-            fprintf(stderr, "DOPPLER_DBG: buffers=%d total_stored=%d "
-                    "vel_fail=%d usable=%d from %d sats\n",
-                    n_satellites, total_buf, vel_fail, n_meas, sats_used);
+        if (solve_dbg_cnt++ % 6 == 0)
+            fprintf(stderr, "DOPPLER: buffers=%d stored=%d usable=%d "
+                    "from %d sats\n",
+                    n_satellites, total_buf, n_meas, sats_used);
     }
 
     pthread_mutex_unlock(&pos_lock);
@@ -435,7 +556,9 @@ done_collect:
     }
 
     /* Initial position estimate: use previous solution if available,
-     * otherwise use mean of satellite subsatellite points. */
+     * otherwise use weighted mean of satellite subsatellite points.
+     * Weight by per-satellite measurement count to prefer satellites
+     * with consistently decoded positions over one-off corrupted decodes. */
     double rx_ecef[3] = {0, 0, 0};
     double clock_drift = 0;
 
@@ -445,48 +568,51 @@ done_collect:
         rx_ecef[2] = prev_ecef[2];
         clock_drift = prev_clock_drift;
     } else {
-        for (int i = 0; i < n_meas; i++) {
-            double r = vec3_norm(all_meas[i].sat_ecef);
-            if (r > 0) {
-                double scale = WGS84_A / r;
-                rx_ecef[0] += all_meas[i].sat_ecef[0] * scale;
-                rx_ecef[1] += all_meas[i].sat_ecef[1] * scale;
-                rx_ecef[2] += all_meas[i].sat_ecef[2] * scale;
+        /* Weight each satellite's sub-satellite point by its measurement
+         * count. Satellites with many consistent positions are more likely
+         * real; one-off corrupted decodes carry less weight. */
+        double total_weight = 0;
+        for (int s = 0; s < n_satellites; s++) {
+            if (!sat_keep[s] || satellites[s].count == 0) continue;
+            /* Use latest valid measurement position */
+            sat_meas_t *latest = NULL;
+            for (int i = satellites[s].count - 1; i >= 0; i--) {
+                sat_meas_t *m = sat_buf_get(&satellites[s], i);
+                if (m && m->valid) { latest = m; break; }
             }
-        }
-        rx_ecef[0] /= n_meas;
-        rx_ecef[1] /= n_meas;
-        rx_ecef[2] /= n_meas;
+            if (!latest) continue;
 
-        /* If height aiding, adjust initial position to correct radius */
+            double r = vec3_norm(latest->sat_ecef);
+            if (r <= 0) continue;
+            double scale = WGS84_A / r;
+            double w = (double)satellites[s].count;
+            rx_ecef[0] += latest->sat_ecef[0] * scale * w;
+            rx_ecef[1] += latest->sat_ecef[1] * scale * w;
+            rx_ecef[2] += latest->sat_ecef[2] * scale * w;
+            total_weight += w;
+        }
+        if (total_weight > 0) {
+            rx_ecef[0] /= total_weight;
+            rx_ecef[1] /= total_weight;
+            rx_ecef[2] /= total_weight;
+        }
+
+        /* If height aiding, adjust initial position to correct altitude.
+         * Must use geodetic conversion (not simple radius scaling) because
+         * WGS-84 is an oblate ellipsoid: surface radius varies by ~21 km
+         * between equator and poles. */
         if (height_aiding_m > 0) {
-            double r = vec3_norm(rx_ecef);
-            if (r > 0) {
-                double target_r = WGS84_A + height_aiding_m;
-                rx_ecef[0] *= target_r / r;
-                rx_ecef[1] *= target_r / r;
-                rx_ecef[2] *= target_r / r;
-            }
+            double ilat, ilon, ialt;
+            ecef_to_geodetic(rx_ecef, &ilat, &ilon, &ialt);
+            geodetic_to_ecef(ilat, ilon, height_aiding_m, rx_ecef);
         }
     }
 
-    {
+    if (verbose) {
         double lat0, lon0, alt0;
         ecef_to_geodetic(rx_ecef, &lat0, &lon0, &alt0);
-        fprintf(stderr, "DOPPLER_DBG: init pos=%.4f,%.4f alt=%.0f "
+        fprintf(stderr, "DOPPLER: init pos=%.4f,%.4f alt=%.0f "
                 "n_meas=%d n_sats=%d\n", lat0, lon0, alt0, n_meas, sats_used);
-
-        /* Dump first few measurements */
-        for (int i = 0; i < n_meas && i < 8; i++) {
-            solver_meas_t *m = &all_meas[i];
-            double slat, slon, salt;
-            ecef_to_geodetic(m->sat_ecef, &slat, &slon, &salt);
-            double spd = vec3_norm(m->sat_vel);
-            double f_dop = -m->range_rate / IR_LAMBDA;
-            fprintf(stderr, "DOPPLER_DBG: meas[%d] sat=%.1f,%.1f "
-                    "alt=%.0fkm vel=%.0fm/s dop=%.0fHz rr=%.1fm/s\n",
-                    i, slat, slon, salt/1000.0, spd, f_dop, m->range_rate);
-        }
     }
 
     /* Iterated Weighted Least Squares */
@@ -538,12 +664,16 @@ done_collect:
             }
         }
 
-        /* Height aiding: sqrt(x^2+y^2+z^2) = R_earth + h */
+        /* Height aiding: constrain geodetic altitude to height_aiding_m.
+         * Uses geodetic altitude (not ECEF radius) because WGS-84 surface
+         * radius varies by ~21 km with latitude. The radial unit vector
+         * approximates d(altitude)/d(ecef). */
         if (use_height) {
             double r0 = vec3_norm(rx_ecef);
             if (r0 > 0) {
-                double target_r = WGS84_A + height_aiding_m;
-                double dy_h = target_r - r0;
+                double hlat, hlon, halt;
+                ecef_to_geodetic(rx_ecef, &hlat, &hlon, &halt);
+                double dy_h = height_aiding_m - halt;
                 double H_h[4];
                 H_h[0] = rx_ecef[0] / r0;
                 H_h[1] = rx_ecef[1] / r0;
@@ -571,7 +701,7 @@ done_collect:
         memcpy(HtWH_copy, HtWH, sizeof(HtWH));
         double inv[4][4];
         if (mat4_invert(HtWH_copy, inv) != 0) {
-            fprintf(stderr, "DOPPLER_DBG: solver FAIL - singular matrix at iter %d\n", iter);
+            fprintf(stderr, "DOPPLER: solver FAIL - singular matrix at iter %d\n", iter);
             return 0;
         }
 
@@ -601,10 +731,10 @@ done_collect:
         double correction = sqrt(delta[0]*delta[0] + delta[1]*delta[1] +
                                   delta[2]*delta[2]);
 
-        if (iter < 5 || iter == MAX_ITERATIONS - 1) {
+        if (verbose && (iter < 3 || iter == MAX_ITERATIONS - 1)) {
             double lat, lon, alt;
             ecef_to_geodetic(rx_ecef, &lat, &lon, &alt);
-            fprintf(stderr, "DOPPLER_DBG: iter %d: correction=%.0f m, "
+            fprintf(stderr, "DOPPLER: iter %d: correction=%.0f m, "
                     "pos=%.4f,%.4f alt=%.0f clk=%.1f\n",
                     iter, correction, lat, lon, alt, clock_drift);
         }
@@ -616,7 +746,7 @@ done_collect:
     }
 
     if (!converged) {
-        fprintf(stderr, "DOPPLER_DBG: solver FAIL - did not converge in %d iterations\n",
+        fprintf(stderr, "DOPPLER: solver FAIL - did not converge in %d iterations\n",
                 MAX_ITERATIONS);
         return 0;
     }
@@ -694,8 +824,9 @@ done_collect:
                 if (use_height) {
                     double r0 = vec3_norm(rx_ecef);
                     if (r0 > 0) {
-                        double target_r = WGS84_A + height_aiding_m;
-                        double dy_h = target_r - r0;
+                        double hlat2, hlon2, halt2;
+                        ecef_to_geodetic(rx_ecef, &hlat2, &hlon2, &halt2);
+                        double dy_h = height_aiding_m - halt2;
                         double H_h[4] = { rx_ecef[0]/r0, rx_ecef[1]/r0,
                                            rx_ecef[2]/r0, 0 };
                         double w_h = 100.0;
@@ -711,7 +842,7 @@ done_collect:
                 memcpy(HtWH2_copy, HtWH2, sizeof(HtWH2));
                 double inv2[4][4];
                 if (mat4_invert(HtWH2_copy, inv2) != 0) {
-                    fprintf(stderr, "DOPPLER_DBG: re-solve FAIL - singular matrix\n");
+                    fprintf(stderr, "DOPPLER: re-solve FAIL - singular matrix\n");
                     return 0;
                 }
 
@@ -734,7 +865,7 @@ done_collect:
             }
 
             if (!converged) {
-                fprintf(stderr, "DOPPLER_DBG: re-solve FAIL - did not converge\n");
+                fprintf(stderr, "DOPPLER: re-solve FAIL - did not converge\n");
                 return 0;
             }
 
@@ -798,16 +929,9 @@ done_collect:
         }
     }
 
-    /* Quality gate: reject solutions with terrible geometry */
-    if (hdop > 50.0) {
-        double lat, lon, alt;
-        ecef_to_geodetic(rx_ecef, &lat, &lon, &alt);
-        fprintf(stderr, "DOPPLER_DBG: HDOP gate FAIL - hdop=%.1f "
-                "pos=%.4f,%.4f\n", hdop, lat, lon);
-        out->n_measurements = n_meas;
-        out->n_satellites = sats_used;
-        return 0;
-    }
+    /* Note: HDOP is reported in the solution for the caller to assess.
+     * With few satellite passes (early operation), HDOP can be 100+
+     * but the position is still useful for approximate location. */
 
     /* Save solution for next iteration */
     prev_ecef[0] = rx_ecef[0];
