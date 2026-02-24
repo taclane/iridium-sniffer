@@ -141,6 +141,8 @@ int position_enabled = 0;
 double position_height = 0;
 int acars_enabled = 0;
 char *station_id = NULL;
+char *acars_udp_host = NULL;
+int acars_udp_port = 0;
 
 /* Threading state */
 volatile sig_atomic_t running = 1;
@@ -574,10 +576,11 @@ int main(int argc, char **argv) {
     }
 
     if (acars_enabled) {
-        acars_init(station_id);
-        fprintf(stderr, "ACARS: enabled (%s output%s)\n",
+        acars_init(station_id, acars_udp_host, acars_udp_port);
+        fprintf(stderr, "ACARS: enabled (%s output%s%s)\n",
                 acars_json ? "JSON" : "text",
-                station_id ? ", station set" : "");
+                station_id ? ", station set" : "",
+                acars_udp_host ? ", UDP stream" : "");
     }
 
     blocking_queue_init(&samples_queue, SAMPLES_QUEUE_SIZE);

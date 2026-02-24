@@ -13,10 +13,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "sbd_acars.h"
 
@@ -32,6 +37,50 @@
 
 int acars_json = 0;
 static const char *station = NULL;
+
+/* ---- UDP JSON streaming ---- */
+
+static int udp_fd = -1;
+static struct sockaddr_in udp_addr;
+
+/* JSON output buffer -- used to build JSON for dual stdout/UDP dispatch */
+#define JSON_BUF_SIZE 8192
+static char json_buf[JSON_BUF_SIZE];
+static int json_pos = 0;
+
+static void json_buf_reset(void) { json_pos = 0; json_buf[0] = '\0'; }
+
+static void json_buf_append(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+
+static void json_buf_append(const char *fmt, ...)
+{
+    if (json_pos >= JSON_BUF_SIZE - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(json_buf + json_pos, JSON_BUF_SIZE - json_pos, fmt, ap);
+    va_end(ap);
+    if (n > 0) json_pos += n;
+    if (json_pos >= JSON_BUF_SIZE) json_pos = JSON_BUF_SIZE - 1;
+}
+
+static void json_buf_emit(void)
+{
+    if (json_pos == 0) return;
+
+    /* stdout (--acars-json) */
+    if (acars_json) {
+        fwrite(json_buf, 1, json_pos, stdout);
+        putchar('\n');
+        fflush(stdout);
+    }
+
+    /* UDP stream (--acars-udp) */
+    if (udp_fd >= 0) {
+        sendto(udp_fd, json_buf, json_pos, 0,
+               (struct sockaddr *)&udp_addr, sizeof(udp_addr));
+    }
+}
 
 /* ---- Stats counters ---- */
 
@@ -224,7 +273,7 @@ static void acars_parse_libacars(const uint8_t *data, int len, int ul,
     if (msg->err)
         stat_acars_errors++;
 
-    if (acars_json) {
+    if (acars_json || udp_fd >= 0) {
         if (msg->err) {
             la_proto_tree_destroy(tree);
             return;
@@ -263,13 +312,14 @@ static void acars_parse_libacars(const uint8_t *data, int len, int ul,
             json_escape(msg->txt, (int)strlen(msg->txt),
                         esc_text, sizeof(esc_text));
 
-        /* Build airframes.io compatible JSON */
-        printf("{\"app\":{\"name\":\"iridium-sniffer\",\"version\":\"1.0\"},"
+        /* Build airframes.io compatible JSON into buffer */
+        json_buf_reset();
+        json_buf_append("{\"app\":{\"name\":\"iridium-sniffer\",\"version\":\"1.0\"},"
                "\"source\":{\"transport\":\"iridium\","
                "\"protocol\":\"acars\",\"parser\":\"libacars\"");
         if (station)
-            printf(",\"station_id\":\"%s\"", station);
-        printf("},\"acars\":{\"timestamp\":\"%s\","
+            json_buf_append(",\"station_id\":\"%s\"", station);
+        json_buf_append("},\"acars\":{\"timestamp\":\"%s\","
                "\"errors\":%d,"
                "\"link_direction\":\"%s\","
                "\"block_end\":%s,"
@@ -283,48 +333,48 @@ static void acars_parse_libacars(const uint8_t *data, int len, int ul,
                reg);
 
         if (ack_str[0])
-            printf(",\"ack\":\"%s\"", ack_str);
-        printf(",\"label\":\"%s\",\"block_id\":\"%c\"",
+            json_buf_append(",\"ack\":\"%s\"", ack_str);
+        json_buf_append(",\"label\":\"%s\",\"block_id\":\"%c\"",
                label, msg->block_id);
 
         if (msg->msg_num[0])
-            printf(",\"message_number\":\"%s%c\"",
+            json_buf_append(",\"message_number\":\"%s%c\"",
                    msg->msg_num, msg->msg_num_seq);
         if (flight[0])
-            printf(",\"flight\":\"%s\"", flight);
+            json_buf_append(",\"flight\":\"%s\"", flight);
         if (msg->sublabel[0])
-            printf(",\"sublabel\":\"%s\"", msg->sublabel);
+            json_buf_append(",\"sublabel\":\"%s\"", msg->sublabel);
         if (msg->mfi[0])
-            printf(",\"mfi\":\"%s\"", msg->mfi);
+            json_buf_append(",\"mfi\":\"%s\"", msg->mfi);
         if (esc_text[0])
-            printf(",\"text\":\"%s\"", esc_text);
+            json_buf_append(",\"text\":\"%s\"", esc_text);
 
-        printf("}");
+        json_buf_append("}");
 
         /* Include decoded application layer (ARINC-622, ADS-C, CPDLC) */
         if (acars_node->next) {
             la_vstring *app_json = la_proto_tree_format_json(
                 NULL, acars_node->next);
             if (app_json && app_json->str && app_json->len > 2) {
-                /* app_json is "{\"arinc622\":{...},...}" --
-                 * strip outer braces and prepend comma */
-                printf(",%.*s", (int)(app_json->len - 2),
+                json_buf_append(",%.*s", (int)(app_json->len - 2),
                        app_json->str + 1);
             }
             if (app_json)
                 la_vstring_destroy(app_json, true);
         }
 
-        printf(",\"freq\":%.0f,\"level\":%.2f", frequency, magnitude);
+        json_buf_append(",\"freq\":%.0f,\"level\":%.2f", frequency, magnitude);
         if (ir_hdr && ir_hdr_len > 0) {
-            printf(",\"header\":\"");
+            json_buf_append(",\"header\":\"");
             for (int i = 0; i < ir_hdr_len; i++)
-                printf("%02x", ir_hdr[i]);
-            printf("\"");
+                json_buf_append("%02x", ir_hdr[i]);
+            json_buf_append("\"");
         }
-        printf("}\n");
-        fflush(stdout);
-    } else {
+        json_buf_append("}");
+        json_buf_emit();
+    }
+
+    if (!acars_json) {
         /* Text mode: timestamp + direction header, then libacars text */
         char ts_buf[32];
         format_timestamp(timestamp, ts_buf, sizeof(ts_buf));
@@ -451,11 +501,12 @@ static void acars_output_json(const uint8_t *data, int len, int ul,
                             "%02x", hdr[i]);
     }
 
-    printf("{\"app\":{\"name\":\"iridium-sniffer\",\"version\":\"1.0\"},"
+    json_buf_reset();
+    json_buf_append("{\"app\":{\"name\":\"iridium-sniffer\",\"version\":\"1.0\"},"
            "\"source\":{\"transport\":\"iridium\",\"protocol\":\"acars\"");
     if (station)
-        printf(",\"station_id\":\"%s\"", station);
-    printf("},\"acars\":{\"timestamp\":\"%s\","
+        json_buf_append(",\"station_id\":\"%s\"", station);
+    json_buf_append("},\"acars\":{\"timestamp\":\"%s\","
            "\"errors\":0,"
            "\"link_direction\":\"%s\","
            "\"block_end\":%s,"
@@ -467,18 +518,18 @@ static void acars_output_json(const uint8_t *data, int len, int ul,
            esc_mode,
            esc_reg);
     if (ack[0])
-        printf(",\"ack\":\"%s\"", esc_ack);
-    printf(",\"label\":\"%s\",\"block_id\":\"%s\"",
+        json_buf_append(",\"ack\":\"%s\"", esc_ack);
+    json_buf_append(",\"label\":\"%s\",\"block_id\":\"%s\"",
            esc_label, esc_bid);
     if (ul && seq[0])
-        printf(",\"message_number\":\"%s\"", esc_seq);
+        json_buf_append(",\"message_number\":\"%s\"", esc_seq);
     if (ul && flight[0])
-        printf(",\"flight\":\"%s\"", esc_flight);
+        json_buf_append(",\"flight\":\"%s\"", esc_flight);
     if (esc_text[0])
-        printf(",\"text\":\"%s\"", esc_text);
-    printf("},\"freq\":%.0f,\"level\":%.2f,\"header\":\"%s\"}\n",
+        json_buf_append(",\"text\":\"%s\"", esc_text);
+    json_buf_append("},\"freq\":%.0f,\"level\":%.2f,\"header\":\"%s\"}",
            frequency, magnitude, esc_hdr);
-    fflush(stdout);
+    json_buf_emit();
 }
 
 static void acars_output_text(const uint8_t *data, int len, int ul,
@@ -647,13 +698,13 @@ static void acars_parse_fallback(const uint8_t *data, int len, int ul,
     if (errors > 0)
         stat_acars_errors++;
 
-    if (acars_json && errors > 0)
+    if ((acars_json || udp_fd >= 0) && errors > 0)
         return;
 
-    if (acars_json)
+    if (acars_json || udp_fd >= 0)
         acars_output_json(stripped, len, ul, timestamp, frequency, magnitude,
                           hdr, hdr_len);
-    else
+    if (!acars_json)
         acars_output_text(stripped, len, ul, timestamp, frequency, magnitude,
                           hdr, hdr_len, errors);
 }
@@ -880,12 +931,33 @@ static void sbd_extract(const uint8_t *data, int len, int ul,
 
 /* ---- Public API ---- */
 
-void acars_init(const char *station_id)
+void acars_init(const char *station_id, const char *udp_host, int udp_port)
 {
     station = station_id;
     memset(sbd_multi, 0, sizeof(sbd_multi));
     if (!crc_initialized)
         crc16_init();
+
+    /* UDP JSON streaming */
+    if (udp_host) {
+        udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udp_fd < 0) {
+            perror("acars_init: UDP socket");
+        } else {
+            memset(&udp_addr, 0, sizeof(udp_addr));
+            udp_addr.sin_family = AF_INET;
+            udp_addr.sin_port = htons(udp_port);
+            if (inet_pton(AF_INET, udp_host, &udp_addr.sin_addr) != 1) {
+                fprintf(stderr, "acars_init: invalid UDP host '%s'\n",
+                        udp_host);
+                close(udp_fd);
+                udp_fd = -1;
+            } else {
+                fprintf(stderr, "ACARS: UDP JSON stream -> %s:%d\n",
+                        udp_host, udp_port);
+            }
+        }
+    }
 
 #ifdef HAVE_LIBACARS
     la_config_set_int("acars_bearer", LA_ACARS_BEARER_SATCOM);
@@ -897,6 +969,10 @@ void acars_init(const char *station_id)
 
 void acars_shutdown(void)
 {
+    if (udp_fd >= 0) {
+        close(udp_fd);
+        udp_fd = -1;
+    }
 #ifdef HAVE_LIBACARS
     if (reasm_ctx) {
         la_reasm_ctx_destroy(reasm_ctx);

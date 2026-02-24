@@ -78,6 +78,8 @@ extern double position_height;
 extern int acars_enabled;
 extern int acars_json;
 extern char *station_id;
+extern char *acars_udp_host;
+extern int acars_udp_port;
 
 static void usage(int exitcode) {
     fprintf(stderr,
@@ -128,6 +130,7 @@ static void usage(int exitcode) {
 "    --parsed               output parsed IDA lines (pipe to reassembler.py)\n"
 "    --acars               decode and display ACARS messages from IDA\n"
 "    --acars-json          output ACARS as JSON (compatible with acars.py)\n"
+"    --acars-udp=HOST:PORT stream ACARS JSON via UDP (e.g. for airframes.io)\n"
 "    --station=ID          station identifier for ACARS JSON output\n"
 "    -v, --verbose           verbose output to stderr\n"
 "    -h, --help              show this help\n"
@@ -182,6 +185,7 @@ void parse_options(int argc, char **argv) {
         OPT_POSITION,
         OPT_ACARS,
         OPT_ACARS_JSON,
+        OPT_ACARS_UDP,
         OPT_STATION,
     };
 
@@ -216,6 +220,7 @@ void parse_options(int argc, char **argv) {
         { "position",       optional_argument, NULL, OPT_POSITION },
         { "acars",          no_argument,       NULL, OPT_ACARS },
         { "acars-json",     no_argument,       NULL, OPT_ACARS_JSON },
+        { "acars-udp",      required_argument, NULL, OPT_ACARS_UDP },
         { "station",        required_argument, NULL, OPT_STATION },
         { NULL,             0,                 NULL, 0 }
     };
@@ -366,6 +371,20 @@ void parse_options(int argc, char **argv) {
             case OPT_ACARS_JSON:
                 acars_enabled = 1;
                 acars_json = 1;
+                break;
+
+            case OPT_ACARS_UDP:
+                acars_enabled = 1;
+                {
+                    char *colon = strrchr(optarg, ':');
+                    if (!colon)
+                        errx(1, "--acars-udp requires HOST:PORT (e.g. 127.0.0.1:5555)");
+                    *colon = '\0';
+                    acars_udp_host = strdup(optarg);
+                    acars_udp_port = atoi(colon + 1);
+                    if (acars_udp_port <= 0 || acars_udp_port > 65535)
+                        errx(1, "Invalid UDP port: %s", colon + 1);
+                }
                 break;
 
             case OPT_STATION:

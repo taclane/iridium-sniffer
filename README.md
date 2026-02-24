@@ -314,6 +314,12 @@ When [libacars-2](https://github.com/szpajder/libacars) is installed, iridium-sn
 
 # JSON with station identifier
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars-json --station=MYSTATION
+
+# Stream ACARS JSON over UDP (e.g. to a remote aggregator)
+./iridium-sniffer -l -i usrp-B210-SERIAL --acars-udp=192.168.1.100:5555 --station=MYSTATION
+
+# Text on stdout + UDP JSON stream simultaneously
+./iridium-sniffer -l -i usrp-B210-SERIAL --acars --acars-udp=192.168.1.100:5555 --station=MYSTATION
 ```
 
 **Text output example (with libacars):**
@@ -342,6 +348,8 @@ SBD: 2026-02-24T12:56:07Z DL 6841542344504f4c4c203635313530 | hAT#DPOLL 65150
 ```json
 {"app":{"name":"iridium-sniffer","version":"1.0"},"source":{"transport":"iridium","protocol":"acars","parser":"libacars","station_id":"MYSTATION"},"acars":{"timestamp":"2026-02-24T13:06:52Z","errors":0,"link_direction":"downlink","block_end":true,"mode":"2","tail":"N-XXXXX","label":"H1","block_id":"F","sublabel":"MD","text":"..."}}
 ```
+
+**UDP streaming** (`--acars-udp=HOST:PORT`) sends each ACARS JSON object as a UDP datagram to a remote host. This can be used independently of `--acars-json` -- combine `--acars` (text on stdout) with `--acars-udp` to get human-readable local output while simultaneously feeding a remote aggregator. The JSON format is the same regardless of output method.
 
 **Shutdown stats** are printed to stderr:
 
@@ -534,6 +542,7 @@ GSMTAP:
 ACARS:
     --acars                 decode and display ACARS/SBD messages from IDA
     --acars-json            output ACARS as JSON (airframes.io compatible)
+    --acars-udp=HOST:PORT   stream ACARS JSON via UDP to remote host
     --station=ID            station identifier for JSON output
 
 Output:
