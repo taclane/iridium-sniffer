@@ -24,6 +24,9 @@ void acars_ida_cb(const uint8_t *data, int len,
                   ir_direction_t direction, float magnitude,
                   void *user);
 
+/* Shut down ACARS subsystem (free libacars resources). */
+void acars_shutdown(void);
+
 /* Print SBD/ACARS stats summary to stderr. */
 void acars_print_stats(void);
 

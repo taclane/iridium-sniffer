@@ -749,8 +749,10 @@ int main(int argc, char **argv) {
         gsmtap_shutdown();
     }
 
-    if (acars_enabled)
+    if (acars_enabled) {
         acars_print_stats();
+        acars_shutdown();
+    }
 
     if (in_file != NULL)
         fclose(in_file);

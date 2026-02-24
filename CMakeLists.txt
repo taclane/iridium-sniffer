@@ -52,6 +52,21 @@ if(NOT HAVE_ANY_SDR)
                     "Install at least one of: libhackrf, libbladeRF, UHD, SoapySDR")
 endif()
 
+# Optional libacars-2 for ARINC-622/ADS-C/CPDLC decoding in ACARS messages
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(LIBACARS QUIET libacars-2)
+endif()
+if(NOT LIBACARS_FOUND)
+    find_library(LIBACARS_LIB acars-2)
+    find_path(LIBACARS_INC libacars/libacars.h PATH_SUFFIXES libacars-2)
+    if(LIBACARS_LIB AND LIBACARS_INC)
+        set(LIBACARS_FOUND TRUE)
+        set(LIBACARS_LIBRARIES ${LIBACARS_LIB})
+        set(LIBACARS_INCLUDE_DIRS ${LIBACARS_INC})
+    endif()
+endif()
+
 # Optional GPU acceleration for burst detection FFTs (mutually exclusive)
 find_package(OpenCL QUIET)
 find_package(Vulkan QUIET)
@@ -148,6 +163,16 @@ if(SOAPYSDR_FOUND)
     target_link_libraries(iridium-sniffer PRIVATE ${SOAPYSDR_LIBRARIES})
     target_compile_definitions(iridium-sniffer PRIVATE HAVE_SOAPYSDR)
     message(STATUS "SoapySDR: enabled")
+endif()
+
+# libacars ARINC-622 decoding
+if(LIBACARS_FOUND)
+    target_link_libraries(iridium-sniffer PRIVATE ${LIBACARS_LIBRARIES})
+    target_include_directories(iridium-sniffer PRIVATE ${LIBACARS_INCLUDE_DIRS})
+    target_compile_definitions(iridium-sniffer PRIVATE HAVE_LIBACARS)
+    message(STATUS "libacars: enabled (ARINC-622/ADS-C/CPDLC decoding)")
+else()
+    message(STATUS "libacars: not found (basic ACARS only)")
 endif()
 
 # GPU acceleration
