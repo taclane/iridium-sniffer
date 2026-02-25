@@ -301,28 +301,33 @@ GSMTAP runs alongside normal RAW output and the web map. Adding `--gsmtap` does 
 
 ## Built-in ACARS / SBD Decoding
 
-The `--acars` flag enables native ACARS and SBD (Short Burst Data) decoding directly from IDA frames, with no Python pipeline required. This replaces the `reassembler.py -m acars` step entirely.
+Three flags control ACARS/SBD output, and can be combined:
 
-When [libacars-2](https://github.com/szpajder/libacars) is installed, iridium-sniffer automatically uses it for full ARINC-622 application layer decoding -- ADS-C position reports, CPDLC controller-pilot datalink, OHMA, MIAM, and other payloads embedded within ACARS messages. Without libacars, basic ACARS field extraction still works.
+| Flag | Output |
+|------|--------|
+| `--acars` | Human-readable text to stdout |
+| `--acars-json` | JSON to stdout (one object per line) |
+| `--acars-udp=HOST:PORT` | JSON via UDP datagram (repeatable, up to 4 endpoints) |
+
+This replaces the `reassembler.py -m acars` pipeline entirely -- no Python needed. When [libacars-2](https://github.com/szpajder/libacars) is installed, ARINC-622 application payloads (ADS-C, CPDLC, OHMA, MIAM) are fully decoded. Without libacars, basic ACARS field extraction still works.
 
 ```bash
 # Human-readable text output
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars
 
-# JSON output (airframes.io compatible)
-./iridium-sniffer -l -i usrp-B210-SERIAL --acars-json
-
-# JSON with station identifier
+# JSON output to stdout
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars-json --station=MYSTATION
 
-# Stream ACARS JSON over UDP (e.g. to a remote aggregator)
+# Stream JSON over UDP to a remote aggregator
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars-udp=192.168.1.100:5555 --station=MYSTATION
 
 # Text on stdout + UDP JSON stream simultaneously
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars --acars-udp=192.168.1.100:5555 --station=MYSTATION
 ```
 
-**Text output example (with libacars):**
+### Text Output
+
+**Example (with libacars):**
 
 ```
 ACARS: 2026-02-24T13:06:52Z DL [hdr:iridium]
@@ -343,7 +348,9 @@ Non-ACARS SBD traffic (IoT telemetry, maritime tracking, etc.) is also displayed
 SBD: 2026-02-24T12:56:07Z DL 6841542344504f4c4c203635313530 | hAT#DPOLL 65150
 ```
 
-**JSON mode** produces one JSON object per line. The envelope format matches [dumpvdl2](https://github.com/szpajder/dumpvdl2) and [dumphfdl](https://github.com/szpajder/dumphfdl), with `"iridium"` as the top-level protocol key (analogous to `"vdl2"` and `"hfdl"`). ACARS field names inside the `"acars"` object are identical to what libacars produces, so aggregation sites can ingest all three tools with one parser.
+### JSON Format
+
+JSON mode (`--acars-json` or `--acars-udp`) produces one JSON object per line. The envelope format matches [dumpvdl2](https://github.com/szpajder/dumpvdl2) and [dumphfdl](https://github.com/szpajder/dumphfdl), with `"iridium"` as the top-level protocol key (analogous to `"vdl2"` and `"hfdl"`). ACARS field names inside the `"acars"` object are identical to what libacars produces, so aggregation sites can ingest all three tools with one parser.
 
 **With libacars** (ARINC-622/ADS-C/CPDLC decoded):
 
@@ -400,7 +407,9 @@ SBD: 2026-02-24T12:56:07Z DL 6841542344504f4c4c203635313530 | hAT#DPOLL 65150
 
 The envelope (`app`, `station`, `t`, `freq`, `sig_level`) and ACARS field names (`err`, `crc_ok`, `more`, `reg`, `mode`, `label`, `blk_id`, `ack`, `flight`, `msg_num`, `msg_num_seq`, `msg_text`) are the same with or without libacars. The difference is that libacars adds decoded ARINC-622 application layer objects (`arinc622`, `adsc`, `cpdlc`, etc.) nested after the base ACARS fields. Sites that already ingest dumpvdl2 or dumphfdl JSON can use the same parser -- just check for the `"iridium"` key instead of `"vdl2"` or `"hfdl"`.
 
-**UDP streaming** (`--acars-udp=HOST:PORT`) sends each ACARS JSON object as a UDP datagram to a remote host. This flag can be specified multiple times (up to 4) to feed multiple aggregators simultaneously. Combine `--acars` (text on stdout) with `--acars-udp` to get human-readable local output while feeding remote sites. The JSON format is the same regardless of output method.
+### UDP Streaming
+
+`--acars-udp=HOST:PORT` sends each ACARS JSON object as a UDP datagram to a remote host. This flag can be specified multiple times (up to 4) to feed multiple aggregators simultaneously. Combine `--acars` (text on stdout) with `--acars-udp` to get human-readable local output while feeding remote sites. The JSON format is the same regardless of output method.
 
 **Shutdown stats** are printed to stderr:
 
