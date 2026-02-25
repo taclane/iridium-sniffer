@@ -82,6 +82,8 @@ extern char *station_id;
 extern char *acars_udp_hosts[ACARS_UDP_MAX];
 extern int acars_udp_ports[ACARS_UDP_MAX];
 extern int acars_udp_count;
+extern char *acarshub_host;
+extern int acarshub_port;
 
 static void usage(int exitcode) {
     fprintf(stderr,
@@ -133,6 +135,7 @@ static void usage(int exitcode) {
 "    --acars               decode and display ACARS messages from IDA\n"
 "    --acars-json          output ACARS as JSON (compatible with acars.py)\n"
 "    --acars-udp=HOST:PORT stream ACARS JSON via UDP (repeatable, max 4)\n"
+"    --acarshub=HOST:PORT  stream to acarshub (iridium-toolkit compat format)\n"
 "    --station=ID          station identifier for ACARS JSON output\n"
 "    -v, --verbose           verbose output to stderr\n"
 "    -h, --help              show this help\n"
@@ -188,6 +191,7 @@ void parse_options(int argc, char **argv) {
         OPT_ACARS,
         OPT_ACARS_JSON,
         OPT_ACARS_UDP,
+        OPT_ACARSHUB,
         OPT_STATION,
     };
 
@@ -223,6 +227,7 @@ void parse_options(int argc, char **argv) {
         { "acars",          no_argument,       NULL, OPT_ACARS },
         { "acars-json",     no_argument,       NULL, OPT_ACARS_JSON },
         { "acars-udp",      required_argument, NULL, OPT_ACARS_UDP },
+        { "acarshub",       required_argument, NULL, OPT_ACARSHUB },
         { "station",        required_argument, NULL, OPT_STATION },
         { NULL,             0,                 NULL, 0 }
     };
@@ -391,6 +396,21 @@ void parse_options(int argc, char **argv) {
                     acars_udp_hosts[acars_udp_count] = strdup(optarg);
                     acars_udp_ports[acars_udp_count] = port;
                     acars_udp_count++;
+                }
+                break;
+
+            case OPT_ACARSHUB:
+                acars_enabled = 1;
+                {
+                    char *colon = strrchr(optarg, ':');
+                    if (!colon)
+                        errx(1, "--acarshub requires HOST:PORT (e.g. 127.0.0.1:5558)");
+                    *colon = '\0';
+                    int port = atoi(colon + 1);
+                    if (port <= 0 || port > 65535)
+                        errx(1, "Invalid acarshub port: %s", colon + 1);
+                    acarshub_host = strdup(optarg);
+                    acarshub_port = port;
                 }
                 break;
 

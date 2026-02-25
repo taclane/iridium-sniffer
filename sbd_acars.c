@@ -45,6 +45,11 @@ static int udp_count = 0;
 static int udp_fds[UDP_MAX];
 static struct sockaddr_in udp_addrs[UDP_MAX];
 
+/* ---- acarshub compatibility endpoint (iridium-toolkit format) ---- */
+
+static int hub_fd = -1;
+static struct sockaddr_in hub_addr;
+
 /* JSON output buffer -- used to build JSON for dual stdout/UDP dispatch */
 #define JSON_BUF_SIZE 8192
 static char json_buf[JSON_BUF_SIZE];
@@ -84,6 +89,150 @@ static void json_buf_emit(void)
                    (struct sockaddr *)&udp_addrs[i], sizeof(udp_addrs[i]));
         }
     }
+}
+
+/* Forward declarations */
+static void format_timestamp(uint64_t ts_ns, char *buf, int bufsz);
+static double ts_to_unix(uint64_t ts_ns);
+
+/* ---- acarshub JSON buffer (iridium-toolkit compat format) ---- */
+
+static char hub_buf[JSON_BUF_SIZE];
+static int hub_pos = 0;
+
+static void hub_buf_reset(void) { hub_pos = 0; hub_buf[0] = '\0'; }
+
+static void hub_buf_append(const char *fmt, ...)
+    __attribute__((format(printf, 1, 2)));
+
+static void hub_buf_append(const char *fmt, ...)
+{
+    if (hub_pos >= JSON_BUF_SIZE - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(hub_buf + hub_pos, JSON_BUF_SIZE - hub_pos, fmt, ap);
+    va_end(ap);
+    if (n > 0) hub_pos += n;
+    if (hub_pos >= JSON_BUF_SIZE) hub_pos = JSON_BUF_SIZE - 1;
+}
+
+static void hub_buf_emit(void)
+{
+    if (hub_pos == 0 || hub_fd < 0) return;
+    sendto(hub_fd, hub_buf, hub_pos, 0,
+           (struct sockaddr *)&hub_addr, sizeof(hub_addr));
+}
+
+/* JSON string escaping for acarshub output */
+static void hub_json_escape(const char *in, int inlen, char *out, int outsz)
+{
+    int o = 0;
+    for (int i = 0; i < inlen && o < outsz - 2; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '"') {
+            if (o + 2 >= outsz) break;
+            out[o++] = '\\'; out[o++] = '"';
+        } else if (c == '\\') {
+            if (o + 2 >= outsz) break;
+            out[o++] = '\\'; out[o++] = '\\';
+        } else if (c == '\n') {
+            if (o + 2 >= outsz) break;
+            out[o++] = '\\'; out[o++] = 'n';
+        } else if (c == '\r') {
+            if (o + 2 >= outsz) break;
+            out[o++] = '\\'; out[o++] = 'r';
+        } else if (c == '\t') {
+            if (o + 2 >= outsz) break;
+            out[o++] = '\\'; out[o++] = 't';
+        } else if (c < 0x20 || c == 0x7f) {
+            if (o + 6 >= outsz) break;
+            o += snprintf(out + o, outsz - o, "\\u%04x", c);
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o] = '\0';
+}
+
+/* Emit iridium-toolkit compatible JSON to acarshub endpoint.
+ * Called from both libacars and fallback paths with pre-extracted fields. */
+static void hub_emit_acars(const char *mode, const char *reg, char ack,
+                            const char *label, char blk_id, int block_end,
+                            int ul, const char *text, int text_len,
+                            const char *flight, const char *msg_num,
+                            char msg_num_seq, int errors,
+                            uint64_t timestamp, double frequency,
+                            float magnitude, const uint8_t *hdr, int hdr_len)
+{
+    if (hub_fd < 0) return;
+
+    /* Timestamp as ISO-8601 */
+    char ts_buf[32];
+    format_timestamp(timestamp, ts_buf, sizeof(ts_buf));
+
+    /* Escape strings */
+    char esc_reg[64], esc_label[16], esc_text[2048];
+    hub_json_escape(reg ? reg : "", reg ? (int)strlen(reg) : 0,
+                    esc_reg, sizeof(esc_reg));
+    hub_json_escape(label ? label : "", label ? (int)strlen(label) : 0,
+                    esc_label, sizeof(esc_label));
+    if (text && text_len > 0)
+        hub_json_escape(text, text_len, esc_text, sizeof(esc_text));
+    else
+        esc_text[0] = '\0';
+
+    /* Header as hex string */
+    char hdr_hex[64] = "";
+    if (hdr && hdr_len > 0) {
+        int hp = 0;
+        for (int i = 0; i < hdr_len && hp < (int)sizeof(hdr_hex) - 3; i++)
+            hp += snprintf(hdr_hex + hp, sizeof(hdr_hex) - hp, "%02x", hdr[i]);
+    }
+
+    hub_buf_reset();
+
+    /* app block -- must say "iridium-toolkit" for acarshub detection */
+    hub_buf_append("{\"app\":{\"name\":\"iridium-toolkit\",\"version\":\"0.0.1\"}");
+
+    /* source block */
+    hub_buf_append(",\"source\":{\"transport\":\"iridium\","
+                   "\"protocol\":\"acars\"");
+    if (station)
+        hub_buf_append(",\"station_id\":\"%s\"", station);
+    hub_buf_append("}");
+
+    /* acars block */
+    hub_buf_append(",\"acars\":{\"timestamp\":\"%s\"", ts_buf);
+    hub_buf_append(",\"errors\":%d", errors);
+    hub_buf_append(",\"link_direction\":\"%s\"", ul ? "uplink" : "downlink");
+    hub_buf_append(",\"block_end\":%s", block_end ? "true" : "false");
+    hub_buf_append(",\"mode\":\"%s\"", mode ? mode : "");
+    hub_buf_append(",\"tail\":\"%s\"", esc_reg);
+    hub_buf_append(",\"label\":\"%s\"", esc_label);
+    hub_buf_append(",\"block_id\":\"%c\"", blk_id);
+    hub_buf_append(",\"ack\":\"%c\"", ack);
+
+    if (flight && flight[0]) {
+        char esc_flt[32];
+        hub_json_escape(flight, (int)strlen(flight), esc_flt, sizeof(esc_flt));
+        hub_buf_append(",\"flight\":\"%s\"", esc_flt);
+    }
+    if (msg_num && msg_num[0]) {
+        char esc_mn[16];
+        hub_json_escape(msg_num, (int)strlen(msg_num), esc_mn, sizeof(esc_mn));
+        hub_buf_append(",\"message_number\":\"%s\"", esc_mn);
+    }
+
+    hub_buf_append(",\"text\":\"%s\"", esc_text);
+    hub_buf_append("}");
+
+    /* top-level freq, level, header */
+    hub_buf_append(",\"freq\":%.1f", frequency);
+    hub_buf_append(",\"level\":%.2f", (double)magnitude);
+    hub_buf_append(",\"header\":\"%s\"", hdr_hex);
+
+    hub_buf_append("}");
+    hub_buf_emit();
 }
 
 /* ---- Stats counters ---- */
@@ -355,6 +504,28 @@ static void acars_parse_libacars(const uint8_t *data, int len, int ul,
             la_vstring_destroy(vstr, true);
 
         fflush(stdout);
+    }
+
+    /* acarshub compat output (iridium-toolkit format) */
+    if (hub_fd >= 0 && !msg->err) {
+        char mode_str[2] = { msg->mode, '\0' };
+
+        /* Strip leading dots from registration for tail field */
+        const char *tail = msg->reg;
+        while (*tail == '.') tail++;
+
+        /* Determine block_end from more flag */
+        int block_end = !msg->final_block ? 0 : 1;
+
+        /* Extract text from libacars msg */
+        const char *txt = msg->txt ? msg->txt : "";
+        int txt_len = msg->txt ? (int)strlen(msg->txt) : 0;
+
+        hub_emit_acars(mode_str, tail, msg->ack, msg->label, msg->block_id,
+                       block_end, ul, txt, txt_len,
+                       msg->flight_id, msg->msg_num, msg->msg_num_seq,
+                       0, timestamp, frequency, magnitude,
+                       ir_hdr, ir_hdr_len);
     }
 
     la_proto_tree_destroy(tree);
@@ -694,6 +865,62 @@ static void acars_parse_fallback(const uint8_t *data, int len, int ul,
     if (!acars_json)
         acars_output_text(stripped, len, ul, timestamp, frequency, magnitude,
                           hdr, hdr_len, errors);
+
+    /* acarshub compat output (iridium-toolkit format) */
+    if (hub_fd >= 0 && errors == 0) {
+        char mode_str[2] = { (char)stripped[0], '\0' };
+
+        /* Strip leading dots from registration */
+        char reg[8] = {0};
+        int rstart = 1;
+        while (rstart < 8 && stripped[rstart] == '.')
+            rstart++;
+        int rlen = 8 - rstart;
+        if (rlen > 0) memcpy(reg, stripped + rstart, rlen);
+        reg[rlen] = '\0';
+
+        char ack_c = (char)stripped[8];
+        char label[3] = { (char)stripped[9], (char)stripped[10], '\0' };
+        char bid = (char)stripped[11];
+
+        const uint8_t *rest = stripped + 12;
+        int rest_len = len - 12;
+
+        int cont = 0;
+        if (rest_len > 0) {
+            if (rest[rest_len - 1] == 0x03)
+                rest_len--;
+            else if (rest[rest_len - 1] == 0x17) {
+                cont = 1;
+                rest_len--;
+            }
+        }
+        int block_end = !cont;
+
+        char flight[8] = {0};
+        char msg_num[4] = {0};
+        char msg_num_seq = 0;
+        const char *txt = NULL;
+        int txt_len = 0;
+
+        if (rest_len > 0 && rest[0] == 0x02) {
+            if (ul && rest_len >= 11) {
+                memcpy(msg_num, rest + 1, 3); msg_num[3] = '\0';
+                msg_num_seq = (char)rest[4];
+                memcpy(flight, rest + 5, 6); flight[6] = '\0';
+                txt = (const char *)(rest + 11);
+                txt_len = rest_len - 11;
+            } else {
+                txt = (const char *)(rest + 1);
+                txt_len = rest_len - 1;
+            }
+        }
+
+        hub_emit_acars(mode_str, reg, ack_c, label, bid, block_end,
+                       ul, txt, txt_len, flight, msg_num, msg_num_seq,
+                       errors, timestamp, frequency, magnitude,
+                       hdr, hdr_len);
+    }
 }
 
 #endif /* !HAVE_LIBACARS */
@@ -919,14 +1146,15 @@ static void sbd_extract(const uint8_t *data, int len, int ul,
 /* ---- Public API ---- */
 
 void acars_init(const char *station_id, const char **udp_hosts,
-                const int *udp_ports, int n_udp)
+                const int *udp_ports, int n_udp,
+                const char *hub_host, int hub_port)
 {
     station = station_id;
     memset(sbd_multi, 0, sizeof(sbd_multi));
     if (!crc_initialized)
         crc16_init();
 
-    /* UDP JSON streaming endpoints */
+    /* UDP JSON streaming endpoints (dumpvdl2 format) */
     udp_count = 0;
     for (int i = 0; i < n_udp && i < UDP_MAX; i++) {
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -951,6 +1179,27 @@ void acars_init(const char *station_id, const char **udp_hosts,
                 udp_hosts[i], udp_ports[i]);
     }
 
+    /* acarshub compatibility endpoint (iridium-toolkit format) */
+    if (hub_host && hub_port > 0) {
+        hub_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (hub_fd < 0) {
+            perror("acars_init: acarshub socket");
+        } else {
+            memset(&hub_addr, 0, sizeof(hub_addr));
+            hub_addr.sin_family = AF_INET;
+            hub_addr.sin_port = htons(hub_port);
+            if (inet_pton(AF_INET, hub_host, &hub_addr.sin_addr) != 1) {
+                fprintf(stderr, "acars_init: invalid acarshub host '%s'\n",
+                        hub_host);
+                close(hub_fd);
+                hub_fd = -1;
+            } else {
+                fprintf(stderr, "ACARS: acarshub stream -> %s:%d\n",
+                        hub_host, hub_port);
+            }
+        }
+    }
+
 #ifdef HAVE_LIBACARS
     la_config_set_int("acars_bearer", LA_ACARS_BEARER_SATCOM);
     reasm_ctx = la_reasm_ctx_new();
@@ -968,6 +1217,10 @@ void acars_shutdown(void)
         }
     }
     udp_count = 0;
+    if (hub_fd >= 0) {
+        close(hub_fd);
+        hub_fd = -1;
+    }
 #ifdef HAVE_LIBACARS
     if (reasm_ctx) {
         la_reasm_ctx_destroy(reasm_ctx);
