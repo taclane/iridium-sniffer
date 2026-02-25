@@ -141,8 +141,12 @@ int position_enabled = 0;
 double position_height = 0;
 int acars_enabled = 0;
 char *station_id = NULL;
-char *acars_udp_host = NULL;
-int acars_udp_port = 0;
+
+/* Multiple UDP endpoints for ACARS JSON streaming */
+#define ACARS_UDP_MAX 4
+char *acars_udp_hosts[ACARS_UDP_MAX];
+int acars_udp_ports[ACARS_UDP_MAX];
+int acars_udp_count = 0;
 
 /* Threading state */
 volatile sig_atomic_t running = 1;
@@ -576,11 +580,16 @@ int main(int argc, char **argv) {
     }
 
     if (acars_enabled) {
-        acars_init(station_id, acars_udp_host, acars_udp_port);
-        fprintf(stderr, "ACARS: enabled (%s output%s%s)\n",
+        acars_init(station_id, (const char **)acars_udp_hosts,
+                   acars_udp_ports, acars_udp_count);
+        fprintf(stderr, "ACARS: enabled (%s output%s",
                 acars_json ? "JSON" : "text",
-                station_id ? ", station set" : "",
-                acars_udp_host ? ", UDP stream" : "");
+                station_id ? ", station set" : "");
+        if (acars_udp_count == 1)
+            fprintf(stderr, ", UDP stream");
+        else if (acars_udp_count > 1)
+            fprintf(stderr, ", %d UDP streams", acars_udp_count);
+        fprintf(stderr, ")\n");
     }
 
     blocking_queue_init(&samples_queue, SAMPLES_QUEUE_SIZE);

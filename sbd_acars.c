@@ -38,10 +38,12 @@
 int acars_json = 0;
 static const char *station = NULL;
 
-/* ---- UDP JSON streaming ---- */
+/* ---- UDP JSON streaming (up to 4 endpoints) ---- */
 
-static int udp_fd = -1;
-static struct sockaddr_in udp_addr;
+#define UDP_MAX 4
+static int udp_count = 0;
+static int udp_fds[UDP_MAX];
+static struct sockaddr_in udp_addrs[UDP_MAX];
 
 /* JSON output buffer -- used to build JSON for dual stdout/UDP dispatch */
 #define JSON_BUF_SIZE 8192
@@ -75,10 +77,12 @@ static void json_buf_emit(void)
         fflush(stdout);
     }
 
-    /* UDP stream (--acars-udp) */
-    if (udp_fd >= 0) {
-        sendto(udp_fd, json_buf, json_pos, 0,
-               (struct sockaddr *)&udp_addr, sizeof(udp_addr));
+    /* UDP streams (--acars-udp, one or more endpoints) */
+    for (int i = 0; i < udp_count; i++) {
+        if (udp_fds[i] >= 0) {
+            sendto(udp_fds[i], json_buf, json_pos, 0,
+                   (struct sockaddr *)&udp_addrs[i], sizeof(udp_addrs[i]));
+        }
     }
 }
 
@@ -273,7 +277,7 @@ static void acars_parse_libacars(const uint8_t *data, int len, int ul,
     if (msg->err)
         stat_acars_errors++;
 
-    if (acars_json || udp_fd >= 0) {
+    if (acars_json || udp_count > 0) {
         if (msg->err) {
             la_proto_tree_destroy(tree);
             return;
@@ -698,10 +702,10 @@ static void acars_parse_fallback(const uint8_t *data, int len, int ul,
     if (errors > 0)
         stat_acars_errors++;
 
-    if ((acars_json || udp_fd >= 0) && errors > 0)
+    if ((acars_json || udp_count > 0) && errors > 0)
         return;
 
-    if (acars_json || udp_fd >= 0)
+    if (acars_json || udp_count > 0)
         acars_output_json(stripped, len, ul, timestamp, frequency, magnitude,
                           hdr, hdr_len);
     if (!acars_json)
@@ -931,32 +935,37 @@ static void sbd_extract(const uint8_t *data, int len, int ul,
 
 /* ---- Public API ---- */
 
-void acars_init(const char *station_id, const char *udp_host, int udp_port)
+void acars_init(const char *station_id, const char **udp_hosts,
+                const int *udp_ports, int n_udp)
 {
     station = station_id;
     memset(sbd_multi, 0, sizeof(sbd_multi));
     if (!crc_initialized)
         crc16_init();
 
-    /* UDP JSON streaming */
-    if (udp_host) {
-        udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (udp_fd < 0) {
+    /* UDP JSON streaming endpoints */
+    udp_count = 0;
+    for (int i = 0; i < n_udp && i < UDP_MAX; i++) {
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) {
             perror("acars_init: UDP socket");
-        } else {
-            memset(&udp_addr, 0, sizeof(udp_addr));
-            udp_addr.sin_family = AF_INET;
-            udp_addr.sin_port = htons(udp_port);
-            if (inet_pton(AF_INET, udp_host, &udp_addr.sin_addr) != 1) {
-                fprintf(stderr, "acars_init: invalid UDP host '%s'\n",
-                        udp_host);
-                close(udp_fd);
-                udp_fd = -1;
-            } else {
-                fprintf(stderr, "ACARS: UDP JSON stream -> %s:%d\n",
-                        udp_host, udp_port);
-            }
+            continue;
         }
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(udp_ports[i]);
+        if (inet_pton(AF_INET, udp_hosts[i], &addr.sin_addr) != 1) {
+            fprintf(stderr, "acars_init: invalid UDP host '%s'\n",
+                    udp_hosts[i]);
+            close(fd);
+            continue;
+        }
+        udp_fds[udp_count] = fd;
+        udp_addrs[udp_count] = addr;
+        udp_count++;
+        fprintf(stderr, "ACARS: UDP JSON stream -> %s:%d\n",
+                udp_hosts[i], udp_ports[i]);
     }
 
 #ifdef HAVE_LIBACARS
@@ -969,10 +978,13 @@ void acars_init(const char *station_id, const char *udp_host, int udp_port)
 
 void acars_shutdown(void)
 {
-    if (udp_fd >= 0) {
-        close(udp_fd);
-        udp_fd = -1;
+    for (int i = 0; i < udp_count; i++) {
+        if (udp_fds[i] >= 0) {
+            close(udp_fds[i]);
+            udp_fds[i] = -1;
+        }
     }
+    udp_count = 0;
 #ifdef HAVE_LIBACARS
     if (reasm_ctx) {
         la_reasm_ctx_destroy(reasm_ctx);

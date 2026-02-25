@@ -15,8 +15,10 @@
 #include "burst_downmix.h"
 
 /* Initialize ACARS subsystem. station_id may be NULL.
- * If udp_host is non-NULL, also opens a UDP socket for JSON streaming. */
-void acars_init(const char *station_id, const char *udp_host, int udp_port);
+ * udp_hosts/udp_ports are parallel arrays of length udp_count for
+ * JSON streaming to one or more remote endpoints (e.g. airframes.io). */
+void acars_init(const char *station_id, const char **udp_hosts,
+                const int *udp_ports, int udp_count);
 
 /* IDA message callback for ACARS processing.
  * Pass this to ida_reassemble() as the callback function. */
