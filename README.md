@@ -449,56 +449,34 @@ or:
 -- libacars: not found (basic ACARS only)
 ```
 
-### Feeding airframes.io and other aggregators
+### Feeding airframes.io, acarshub, and other aggregators
 
-The traditional Python pipeline for getting Iridium ACARS into [airframes.io](https://airframes.io) requires four processes chained together:
+The traditional Python pipeline for getting Iridium ACARS into aggregators requires four processes chained together:
 
 ```bash
 # Traditional pipeline (gr-iridium + iridium-toolkit + acars.py)
 iridium-extractor -D 4 rtl-sdr | iridium-parser.py | reassembler.py -m acars -a json | acars.py -s MYSTATION -u udp://feed.airframes.io:5555
 ```
 
-With built-in ACARS decoding and UDP streaming, the entire pipeline collapses to a single command:
+iridium-sniffer replaces that entire chain. Use `--acarshub` for sites that expect the iridium-toolkit JSON format (this includes airframes.io and [acarshub](https://github.com/sdr-enthusiasts/docker-acarshub)):
 
 ```bash
-# Single binary, no Python, no pipes
-./iridium-sniffer -l -i soapy-0 --acars-udp=feed.airframes.io:5555 --station=MYSTATION
-```
+# Feed airframes.io (iridium-toolkit format, confirmed compatible)
+./iridium-sniffer -l -i soapy-0 --acarshub=feed.airframes.io:5555 --station=MYSTATION
 
-Add `--acars` to also see human-readable text output locally while feeding:
-
-```bash
-./iridium-sniffer -l -i soapy-0 --acars --acars-udp=feed.airframes.io:5555 --station=MYSTATION
-```
-
-Feed multiple sites simultaneously by repeating `--acars-udp`:
-
-```bash
-./iridium-sniffer -l -i soapy-0 \
-  --acars-udp=feed.airframes.io:5555 \
-  --acars-udp=10.0.0.5:6000 \
-  --station=MYSTATION
-```
-
-The JSON envelope follows the same convention used by [dumpvdl2](https://github.com/szpajder/dumpvdl2) and [dumphfdl](https://github.com/szpajder/dumphfdl) (both by szpajder). Aggregation sites that already ingest VDL2 or HFDL JSON can reuse the same parser logic -- the structure is identical, with `"iridium"` replacing `"vdl2"` or `"hfdl"` as the top-level key. When libacars is installed, decoded ARINC-622 application payloads (ADS-C, CPDLC, OHMA) appear as additional nested objects within the ACARS block.
-
-### Feeding acarshub
-
-[acarshub](https://github.com/sdr-enthusiasts/docker-acarshub) currently expects the iridium-toolkit JSON format. The `--acarshub` flag outputs in this format:
-
-```bash
+# Feed a local acarshub instance (default IRDM port 5558)
 ./iridium-sniffer -l -i soapy-0 --acarshub=127.0.0.1:5558 --station=MYSTATION
 ```
 
-This can be combined with other output flags. For example, to feed acarshub and airframes.io simultaneously while seeing text output locally:
+Add `--acars` for human-readable text output locally while feeding:
 
 ```bash
-./iridium-sniffer -l -i soapy-0 \
-  --acars \
-  --acars-udp=feed.airframes.io:5555 \
-  --acarshub=127.0.0.1:5558 \
-  --station=MYSTATION
+./iridium-sniffer -l -i soapy-0 --acars --acarshub=feed.airframes.io:5555 --station=MYSTATION
 ```
+
+In Docker Compose, set `ENABLE_IRDM=true` and `IRDM_CONNECTIONS=udp` on the acarshub container (default port 5558).
+
+**Note:** `--acars-udp` outputs a different JSON format (dumpvdl2/dumphfdl envelope with `"iridium"` as the top-level key). This is a forward-looking format that has not yet been validated against any third-party aggregation sites. Use `--acarshub` for known-working compatibility with existing services. Both flags can be used simultaneously.
 
 In Docker Compose, set `ENABLE_IRDM=true` and `IRDM_CONNECTIONS=udp` on the acarshub container (default port 5558).
 
