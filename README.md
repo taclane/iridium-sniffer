@@ -149,7 +149,7 @@ cmake .. -DCMAKE_BUILD_TYPE=Debug
 # Built-in ACARS/SBD decoding (no Python needed)
 ./iridium-sniffer -l -i soapy-0 --acars
 
-# ACARS JSON for airframes.io
+# ACARS JSON to stdout (dumpvdl2/dumphfdl compatible format)
 ./iridium-sniffer -l -i soapy-0 --acars-json --station=MYSTATION
 
 # Direct ACARS/SBD recovery via iridium-toolkit (bypasses iridium-parser.py)
@@ -301,28 +301,37 @@ GSMTAP runs alongside normal RAW output and the web map. Adding `--gsmtap` does 
 
 ## Built-in ACARS / SBD Decoding
 
-The `--acars` flag enables native ACARS and SBD (Short Burst Data) decoding directly from IDA frames, with no Python pipeline required. This replaces the `reassembler.py -m acars` step entirely.
+These flags control ACARS/SBD output, and can be combined:
 
-When [libacars-2](https://github.com/szpajder/libacars) is installed, iridium-sniffer automatically uses it for full ARINC-622 application layer decoding -- ADS-C position reports, CPDLC controller-pilot datalink, OHMA, MIAM, and other payloads embedded within ACARS messages. Without libacars, basic ACARS field extraction still works.
+| Flag | Output |
+|------|--------|
+| `--acars` | Human-readable text to stdout |
+| `--acars-json` | JSON to stdout (dumpvdl2/dumphfdl format) |
+| `--acars-udp=HOST:PORT` | JSON via UDP (dumpvdl2/dumphfdl format, repeatable, max 4) |
+| `--acarshub=HOST:PORT` | JSON via UDP (iridium-toolkit format, for [acarshub](https://github.com/sdr-enthusiasts/docker-acarshub)) |
+
+This replaces the `reassembler.py -m acars` pipeline entirely -- no Python needed. When [libacars-2](https://github.com/szpajder/libacars) is installed, ARINC-622 application payloads (ADS-C, CPDLC, OHMA, MIAM) are fully decoded. Without libacars, basic ACARS field extraction still works.
 
 ```bash
 # Human-readable text output
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars
 
-# JSON output (airframes.io compatible)
-./iridium-sniffer -l -i usrp-B210-SERIAL --acars-json
-
-# JSON with station identifier
+# JSON output to stdout
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars-json --station=MYSTATION
 
-# Stream ACARS JSON over UDP (e.g. to a remote aggregator)
+# Stream JSON over UDP to a remote aggregator
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars-udp=192.168.1.100:5555 --station=MYSTATION
+
+# Stream to acarshub (iridium-toolkit compatible format)
+./iridium-sniffer -l -i usrp-B210-SERIAL --acarshub=127.0.0.1:5558 --station=MYSTATION
 
 # Text on stdout + UDP JSON stream simultaneously
 ./iridium-sniffer -l -i usrp-B210-SERIAL --acars --acars-udp=192.168.1.100:5555 --station=MYSTATION
 ```
 
-**Text output example (with libacars):**
+### Text Output
+
+**Example (with libacars):**
 
 ```
 ACARS: 2026-02-24T13:06:52Z DL [hdr:iridium]
@@ -343,13 +352,68 @@ Non-ACARS SBD traffic (IoT telemetry, maritime tracking, etc.) is also displayed
 SBD: 2026-02-24T12:56:07Z DL 6841542344504f4c4c203635313530 | hAT#DPOLL 65150
 ```
 
-**JSON mode** produces one JSON object per line, compatible with the [airframes.io](https://airframes.io) ingestion pipeline:
+### JSON Format
+
+JSON mode (`--acars-json` or `--acars-udp`) produces one JSON object per line. The envelope format matches [dumpvdl2](https://github.com/szpajder/dumpvdl2) and [dumphfdl](https://github.com/szpajder/dumphfdl), with `"iridium"` as the top-level protocol key (analogous to `"vdl2"` and `"hfdl"`). ACARS field names inside the `"acars"` object are identical to what libacars produces, so aggregation sites can ingest all three tools with one parser.
+
+**With libacars** (ARINC-622/ADS-C/CPDLC decoded):
 
 ```json
-{"app":{"name":"iridium-sniffer","version":"1.0"},"source":{"transport":"iridium","protocol":"acars","parser":"libacars","station_id":"MYSTATION"},"acars":{"timestamp":"2026-02-24T13:06:52Z","errors":0,"link_direction":"downlink","block_end":true,"mode":"2","tail":"N-XXXXX","label":"H1","block_id":"F","sublabel":"MD","text":"..."}}
+{
+  "iridium": {
+    "app": { "name": "iridium-sniffer", "ver": "1.0" },
+    "station": "MYSTATION",
+    "t": { "sec": 1740412012, "usec": 555856 },
+    "freq": 1623126868,
+    "sig_level": 29.02,
+    "acars": {
+      "err": false,
+      "crc_ok": true,
+      "more": false,
+      "reg": ".N12345",
+      "mode": "2",
+      "label": "H1",
+      "blk_id": "F",
+      "ack": "!",
+      "sublabel": "DF",
+      "mfi": "01",
+      "msg_text": "...",
+      "arinc622": { "...decoded application payload..." }
+    }
+  }
+}
 ```
 
-**UDP streaming** (`--acars-udp=HOST:PORT`) sends each ACARS JSON object as a UDP datagram to a remote host. This can be used independently of `--acars-json` -- combine `--acars` (text on stdout) with `--acars-udp` to get human-readable local output while simultaneously feeding a remote aggregator. The JSON format is the same regardless of output method.
+**Without libacars** (basic ACARS fields only):
+
+```json
+{
+  "iridium": {
+    "app": { "name": "iridium-sniffer", "ver": "1.0" },
+    "station": "MYSTATION",
+    "t": { "sec": 1740412012, "usec": 555856 },
+    "freq": 1623126868,
+    "sig_level": 29.02,
+    "acars": {
+      "err": false,
+      "crc_ok": true,
+      "more": false,
+      "reg": ".N12345",
+      "mode": "2",
+      "label": "H1",
+      "blk_id": "F",
+      "ack": "!",
+      "msg_text": "..."
+    }
+  }
+}
+```
+
+The envelope (`app`, `station`, `t`, `freq`, `sig_level`) and ACARS field names (`err`, `crc_ok`, `more`, `reg`, `mode`, `label`, `blk_id`, `ack`, `flight`, `msg_num`, `msg_num_seq`, `msg_text`) are the same with or without libacars. The difference is that libacars adds decoded ARINC-622 application layer objects (`arinc622`, `adsc`, `cpdlc`, etc.) nested after the base ACARS fields. Sites that already ingest dumpvdl2 or dumphfdl JSON can use the same parser -- just check for the `"iridium"` key instead of `"vdl2"` or `"hfdl"`.
+
+### UDP Streaming
+
+`--acars-udp=HOST:PORT` sends each ACARS JSON object as a UDP datagram to a remote host. This flag can be specified multiple times (up to 4) to feed multiple aggregators simultaneously. Combine `--acars` (text on stdout) with `--acars-udp` to get human-readable local output while feeding remote sites. The JSON format is the same regardless of output method.
 
 **Shutdown stats** are printed to stderr:
 
@@ -385,20 +449,13 @@ or:
 -- libacars: not found (basic ACARS only)
 ```
 
-### Feeding airframes.io
+### Feeding airframes.io and other aggregators
 
 The traditional Python pipeline for getting Iridium ACARS into [airframes.io](https://airframes.io) requires four processes chained together:
 
 ```bash
 # Traditional pipeline (gr-iridium + iridium-toolkit + acars.py)
 iridium-extractor -D 4 rtl-sdr | iridium-parser.py | reassembler.py -m acars -a json | acars.py -s MYSTATION -u udp://feed.airframes.io:5555
-```
-
-Or with iridium-sniffer replacing gr-iridium but still using the Python pipeline:
-
-```bash
-# iridium-sniffer + Python pipeline
-./iridium-sniffer -l -i soapy-0 --parsed | reassembler.py -m acars -a json | acars.py -s MYSTATION -u udp://feed.airframes.io:5555
 ```
 
 With built-in ACARS decoding and UDP streaming, the entire pipeline collapses to a single command:
@@ -408,13 +465,42 @@ With built-in ACARS decoding and UDP streaming, the entire pipeline collapses to
 ./iridium-sniffer -l -i soapy-0 --acars-udp=feed.airframes.io:5555 --station=MYSTATION
 ```
 
-Add `--acars` to also see human-readable text output locally while feeding the remote aggregator:
+Add `--acars` to also see human-readable text output locally while feeding:
 
 ```bash
 ./iridium-sniffer -l -i soapy-0 --acars --acars-udp=feed.airframes.io:5555 --station=MYSTATION
 ```
 
-The JSON format is compatible with the existing airframes.io ingestion pipeline. When libacars is installed, decoded ARINC-622 application payloads (ADS-C position reports, CPDLC clearances, OHMA) are included as additional structured fields in the JSON output.
+Feed multiple sites simultaneously by repeating `--acars-udp`:
+
+```bash
+./iridium-sniffer -l -i soapy-0 \
+  --acars-udp=feed.airframes.io:5555 \
+  --acars-udp=10.0.0.5:6000 \
+  --station=MYSTATION
+```
+
+The JSON envelope follows the same convention used by [dumpvdl2](https://github.com/szpajder/dumpvdl2) and [dumphfdl](https://github.com/szpajder/dumphfdl) (both by szpajder). Aggregation sites that already ingest VDL2 or HFDL JSON can reuse the same parser logic -- the structure is identical, with `"iridium"` replacing `"vdl2"` or `"hfdl"` as the top-level key. When libacars is installed, decoded ARINC-622 application payloads (ADS-C, CPDLC, OHMA) appear as additional nested objects within the ACARS block.
+
+### Feeding acarshub
+
+[acarshub](https://github.com/sdr-enthusiasts/docker-acarshub) currently expects the iridium-toolkit JSON format. The `--acarshub` flag outputs in this format:
+
+```bash
+./iridium-sniffer -l -i soapy-0 --acarshub=127.0.0.1:5558 --station=MYSTATION
+```
+
+This can be combined with other output flags. For example, to feed acarshub and airframes.io simultaneously while seeing text output locally:
+
+```bash
+./iridium-sniffer -l -i soapy-0 \
+  --acars \
+  --acars-udp=feed.airframes.io:5555 \
+  --acarshub=127.0.0.1:5558 \
+  --station=MYSTATION
+```
+
+In Docker Compose, set `ENABLE_IRDM=true` and `IRDM_CONNECTIONS=udp` on the acarshub container (default port 5558).
 
 ## Parsed IDA Output
 
@@ -572,8 +658,9 @@ GSMTAP:
 
 ACARS:
     --acars                 decode and display ACARS/SBD messages from IDA
-    --acars-json            output ACARS as JSON (airframes.io compatible)
-    --acars-udp=HOST:PORT   stream ACARS JSON via UDP to remote host
+    --acars-json            output ACARS as JSON to stdout
+    --acars-udp=HOST:PORT   stream ACARS JSON via UDP (repeatable, max 4)
+    --acarshub=HOST:PORT    stream to acarshub (iridium-toolkit format)
     --station=ID            station identifier for JSON output
 
 Output:

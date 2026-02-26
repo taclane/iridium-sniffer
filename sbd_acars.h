@@ -16,9 +16,11 @@
 
 /* Initialize ACARS subsystem. station_id may be NULL.
  * udp_hosts/udp_ports are parallel arrays of length udp_count for
- * JSON streaming to one or more remote endpoints (e.g. airframes.io). */
+ * JSON streaming to one or more remote endpoints (dumpvdl2 format).
+ * hub_host/hub_port is the optional acarshub endpoint (iridium-toolkit format). */
 void acars_init(const char *station_id, const char **udp_hosts,
-                const int *udp_ports, int udp_count);
+                const int *udp_ports, int udp_count,
+                const char *hub_host, int hub_port);
 
 /* IDA message callback for ACARS processing.
  * Pass this to ida_reassemble() as the callback function. */
