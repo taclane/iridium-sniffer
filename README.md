@@ -689,7 +689,7 @@ Output:
 
 Below 1617.775 MHz is Globalstar's exclusive territory. The ITU allocation extends down to 1616 MHz, but Iridium is not authorized to transmit there.
 
-**Sample rate:** 10 MHz (default) covers the full authorized Iridium band without processing empty spectrum. SDRs with 12 MHz capability can use `-r 12000000 -c 1621000000` to cover the entire ITU allocation including the unauthorized guard band, but this provides no additional Iridium signals.
+**Sample rate:** 10 MHz (default) covers the full authorized Iridium band without processing empty spectrum. SDRs with 12 MHz capability can use `-r 12000000 -c 1621000000` to cover the entire ITU allocation including the unauthorized guard band, but this provides no additional Iridium signals. There is no decimation (`-D`) flag -- each detected burst is automatically downmixed and decimated to 250 kHz internally regardless of input sample rate.
 
 **Narrowband SDRs (RTL-SDR):** For RTL-SDR and other SDRs limited to 2-3 MHz bandwidth, use `-c 1625500000 -r 2400000` to center on the ring alert and simplex channels (1624.3-1626.7 MHz). This captures the IRA frames needed for the web map. The default 1622 MHz center is optimized for wideband receivers and places ring alert channels outside narrowband capture range.
 
