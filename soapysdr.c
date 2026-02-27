@@ -128,6 +128,16 @@ SoapySDRDevice *soapy_setup(int id, const char *args) {
     if (SoapySDRDevice_setFrequency(device, SOAPY_SDR_RX, 0, center_freq, NULL) != 0)
         errx(1, "Unable to set SoapySDR frequency: %s", SoapySDRDevice_lastError());
 
+    /* Disable AGC for manual gain control. SDRplay devices (RSP1A, RSP2, etc.)
+     * have AGC enabled by default; setting gain while AGC is active is ignored,
+     * and the inconsistent state causes activateStream() to fail with
+     * sdrplay_api_Fail. */
+    if (SoapySDRDevice_hasGainMode(device, SOAPY_SDR_RX, 0)) {
+        SoapySDRDevice_setGainMode(device, SOAPY_SDR_RX, 0, false);
+        if (verbose)
+            fprintf(stderr, "SoapySDR: disabled AGC for manual gain control\n");
+    }
+
     if (SoapySDRDevice_setGain(device, SOAPY_SDR_RX, 0, soapy_gain_val) != 0) {
         if (verbose)
             warnx("Unable to set SoapySDR gain (continuing anyway)");
@@ -142,9 +152,10 @@ SoapySDRDevice *soapy_setup(int id, const char *args) {
         /* Find the correct bias tee setting key for this device.
          * Different SoapySDR drivers use different names:
          * Airspy/RTL-SDR: "biastee", bladeRF: "biastee_rx", HackRF: "bias_tx" */
-        size_t num_settings;
+        size_t num_settings = 0;
         SoapySDRArgInfo *settings = SoapySDRDevice_getSettingInfo(device, &num_settings);
         int found = 0;
+        if (!settings) num_settings = 0;
         for (size_t i = 0; i < num_settings; ++i) {
             if (strstr(settings[i].key, "bias") && strstr(settings[i].key, "rx")) {
                 /* Prefer RX-specific bias tee (e.g. biastee_rx) */
