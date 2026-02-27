@@ -39,6 +39,7 @@
 /* ---- Configuration ---- */
 
 int acars_json = 0;
+extern int acars_enabled;
 static const char *station = NULL;
 
 /* ---- UDP JSON streaming (up to 4 endpoints) ---- */
@@ -1001,7 +1002,7 @@ static void acars_parse_fallback(const uint8_t *data, int len, int ul,
 static void sbd_output_raw(const uint8_t *data, int len, int ul,
                             uint64_t timestamp, double frequency)
 {
-    if (acars_json)
+    if (acars_enabled)
         return;
 
     char ts_buf[32];
