@@ -31,6 +31,8 @@ extern int verbose;
 #define MAX_MEAS_AGE_NS      (30ULL * 60 * 1000000000ULL)  /* 30 min */
 #define MIN_VEL_INTERVAL_NS  (2ULL * 1000000000ULL)         /* 2 sec */
 #define MAX_SAT_CLUSTER_DIST 8000e3   /* max 3D ECEF distance between visible sats (m) */
+#define SAT_GAP_RESET_S      600.0   /* reset sat buffer after 10 min gap (new pass) */
+#define MAX_SOLUTION_JUMP    500e3    /* reject solutions >500 km from previous (m) */
 
 /* ---- Internal types ---- */
 
@@ -55,6 +57,7 @@ typedef struct {
     double sat_vel[3];      /* estimated satellite velocity (m/s) */
     double range_rate;      /* measured range rate (m/s) */
     double weight;
+    int sat_idx;            /* index into satellites[] for per-sat residual check */
 } solver_meas_t;
 
 /* ---- Module state ---- */
@@ -69,6 +72,7 @@ static int height_aiding_enabled;
 static double prev_ecef[3] = {0, 0, 0};
 static double prev_clock_drift = 0;
 static int has_prev_solution = 0;
+static int jump_reject_count = 0;
 
 /* ---- Helpers ---- */
 
@@ -361,21 +365,33 @@ void doppler_pos_add_measurement(const ira_data_t *ira, double frequency,
     pthread_mutex_lock(&pos_lock);
     sat_buffer_t *s = find_or_create_sat(ira->sat_id);
     if (s) {
-        /* Consistency check: if satellite already has measurements,
-         * verify new position is within reasonable distance of last one.
-         * At ~7.5 km/s, max ~60 km movement per 8-second IRA interval. */
         if (s->count > 0) {
             int last = (s->head - 1 + MEAS_PER_SAT) % MEAS_PER_SAT;
-            double dx = sat_ecef[0] - s->meas[last].sat_ecef[0];
-            double dy = sat_ecef[1] - s->meas[last].sat_ecef[1];
-            double dz = sat_ecef[2] - s->meas[last].sat_ecef[2];
-            double dist = sqrt(dx*dx + dy*dy + dz*dz);
             double dt = (double)(timestamp - s->meas[last].timestamp) / 1e9;
-            if (dt > 0 && dt < 120 && dist / dt > 10000.0) {
-                /* Speed > 10 km/s is impossible for Iridium (~7.5 km/s) */
-                dbg_vel_rej++;
-                pthread_mutex_unlock(&pos_lock);
-                goto dbg_print;
+
+            /* Long gap: likely a different physical satellite reusing
+             * this 7-bit sat_id. Reset the buffer to avoid mixing
+             * measurements from different orbital planes. */
+            if (dt > SAT_GAP_RESET_S) {
+                if (verbose)
+                    fprintf(stderr, "DOPPLER: sat=%d gap=%.0fs, "
+                            "resetting buffer (likely new pass)\n",
+                            ira->sat_id, dt);
+                s->count = 0;
+                s->head = 0;
+                s->channel_freq = 0;
+            } else {
+                /* Short gap: verify position consistency.
+                 * At ~7.5 km/s, speed > 10 km/s is impossible. */
+                double dx = sat_ecef[0] - s->meas[last].sat_ecef[0];
+                double dy = sat_ecef[1] - s->meas[last].sat_ecef[1];
+                double dz = sat_ecef[2] - s->meas[last].sat_ecef[2];
+                double dist = sqrt(dx*dx + dy*dy + dz*dz);
+                if (dt > 0 && dt < 120 && dist / dt > 10000.0) {
+                    dbg_vel_rej++;
+                    pthread_mutex_unlock(&pos_lock);
+                    goto dbg_print;
+                }
             }
         }
         sat_buf_add(s, sat_ecef, frequency, timestamp);
@@ -589,6 +605,7 @@ int doppler_pos_solve(doppler_solution_t *out)
             memcpy(sm->sat_vel, vel, sizeof(sm->sat_vel));
             sm->range_rate = range_rate;
             sm->weight = 1.0;
+            sm->sat_idx = s;
             n_meas++;
             sat_contributed = 1;
 
@@ -996,6 +1013,204 @@ done_collect:
         }
     }
 
+    /* Per-satellite residual screening: if one satellite's measurements
+     * have systematically higher residuals than others, it likely has
+     * a wrong channel assignment or corrupted orbital data. Drop it. */
+    {
+        int n_total_now = n_meas + rejected;
+
+        /* Compute receiver velocity for residual calculation */
+        double ps_rx_vel[3];
+        ps_rx_vel[0] = -OMEGA_EARTH * rx_ecef[1];
+        ps_rx_vel[1] =  OMEGA_EARTH * rx_ecef[0];
+        ps_rx_vel[2] = 0.0;
+
+        /* Accumulate per-satellite mean absolute residual */
+        double sat_res_sum[MAX_SATELLITES] = {0};
+        int sat_res_count[MAX_SATELLITES] = {0};
+
+        for (int i = 0; i < n_total_now; i++) {
+            solver_meas_t *m = &all_meas[i];
+            if (m->weight == 0) continue;
+            if (m->sat_idx < 0 || m->sat_idx >= MAX_SATELLITES) continue;
+
+            double los[3];
+            vec3_sub(m->sat_ecef, rx_ecef, los);
+            double rho = vec3_norm(los);
+            if (rho < 1.0) continue;
+
+            double rel[3] = { m->sat_vel[0] - ps_rx_vel[0],
+                              m->sat_vel[1] - ps_rx_vel[1],
+                              m->sat_vel[2] - ps_rx_vel[2] };
+            double rho_dot_pred = vec3_dot(los, rel) / rho + clock_drift;
+            double res = fabs(m->range_rate - rho_dot_pred);
+
+            sat_res_sum[m->sat_idx] += res;
+            sat_res_count[m->sat_idx]++;
+        }
+
+        /* Collect per-satellite mean residuals */
+        double sat_mean_res[MAX_SATELLITES];
+        int active_sats[MAX_SATELLITES];
+        int n_active = 0;
+
+        for (int s = 0; s < MAX_SATELLITES; s++) {
+            if (sat_res_count[s] == 0) continue;
+            sat_mean_res[s] = sat_res_sum[s] / sat_res_count[s];
+            active_sats[n_active++] = s;
+        }
+
+        if (n_active >= 3) {
+            /* Find median residual across satellites */
+            double sorted_res[MAX_SATELLITES];
+            for (int i = 0; i < n_active; i++)
+                sorted_res[i] = sat_mean_res[active_sats[i]];
+            /* Simple insertion sort for small n */
+            for (int i = 1; i < n_active; i++) {
+                double key = sorted_res[i];
+                int j = i - 1;
+                while (j >= 0 && sorted_res[j] > key) {
+                    sorted_res[j + 1] = sorted_res[j];
+                    j--;
+                }
+                sorted_res[j + 1] = key;
+            }
+            double median_res = sorted_res[n_active / 2];
+
+            /* Drop satellites with mean residual > 3x median */
+            int sat_dropped = 0;
+            for (int i = 0; i < n_active; i++) {
+                int s = active_sats[i];
+                if (sat_mean_res[s] > 3.0 * median_res && median_res > 0) {
+                    if (verbose)
+                        fprintf(stderr, "DOPPLER: dropping sat_idx=%d "
+                                "(sat_id=%d) residual=%.1f vs median=%.1f\n",
+                                s, satellites[s].sat_id,
+                                sat_mean_res[s], median_res);
+                    /* Zero out all measurements from this satellite */
+                    for (int j = 0; j < n_total_now; j++) {
+                        if (all_meas[j].sat_idx == s)
+                            all_meas[j].weight = 0;
+                    }
+                    sat_dropped++;
+                    sats_used--;
+                }
+            }
+
+            /* Re-solve if satellites were dropped and enough remain */
+            if (sat_dropped > 0) {
+                int remaining = 0;
+                for (int i = 0; i < n_total_now; i++)
+                    if (all_meas[i].weight > 0) remaining++;
+
+                if (remaining >= MIN_MEASUREMENTS && sats_used >= MIN_SATELLITES) {
+                    converged = 0;
+                    n_meas = remaining;
+
+                    for (int iter = 0; iter < MAX_ITERATIONS; iter++) {
+                        double HtWH3[4][4] = {{0}};
+                        double HtWy3[4] = {0};
+
+                        double rv3[3];
+                        rv3[0] = -OMEGA_EARTH * rx_ecef[1];
+                        rv3[1] =  OMEGA_EARTH * rx_ecef[0];
+                        rv3[2] = 0.0;
+
+                        for (int i = 0; i < n_total_now; i++) {
+                            solver_meas_t *m = &all_meas[i];
+                            if (m->weight == 0) continue;
+
+                            double los[3];
+                            vec3_sub(m->sat_ecef, rx_ecef, los);
+                            double rho = vec3_norm(los);
+                            if (rho < 1.0) continue;
+
+                            double rv[3] = { m->sat_vel[0] - rv3[0],
+                                             m->sat_vel[1] - rv3[1],
+                                             m->sat_vel[2] - rv3[2] };
+                            double rho_dot_geom = vec3_dot(los, rv) / rho;
+                            double rho_dot_pred = rho_dot_geom + clock_drift;
+                            double dy = m->range_rate - rho_dot_pred;
+
+                            double H_row[4];
+                            double rho2 = rho * rho;
+                            H_row[0] = -rv[0]/rho + los[0]*rho_dot_geom/rho2
+                                        + OMEGA_EARTH * los[1] / rho;
+                            H_row[1] = -rv[1]/rho + los[1]*rho_dot_geom/rho2
+                                        - OMEGA_EARTH * los[0] / rho;
+                            H_row[2] = -rv[2]/rho + los[2]*rho_dot_geom/rho2;
+                            H_row[3] = 1.0;
+
+                            double w = m->weight;
+                            for (int r = 0; r < 4; r++) {
+                                for (int c = 0; c < 4; c++)
+                                    HtWH3[r][c] += H_row[r] * w * H_row[c];
+                                HtWy3[r] += H_row[r] * w * dy;
+                            }
+                        }
+
+                        if (use_height) {
+                            double r0 = vec3_norm(rx_ecef);
+                            if (r0 > 0) {
+                                double hlat3, hlon3, halt3;
+                                ecef_to_geodetic(rx_ecef, &hlat3, &hlon3, &halt3);
+                                double dy_h = height_aiding_m - halt3;
+                                double H_h[4] = { rx_ecef[0]/r0, rx_ecef[1]/r0,
+                                                   rx_ecef[2]/r0, 0 };
+                                double w_h = 100.0;
+                                for (int r = 0; r < 4; r++) {
+                                    for (int c = 0; c < 4; c++)
+                                        HtWH3[r][c] += H_h[r] * w_h * H_h[c];
+                                    HtWy3[r] += H_h[r] * w_h * dy_h;
+                                }
+                            }
+                        }
+
+                        double HtWH3_copy[4][4];
+                        memcpy(HtWH3_copy, HtWH3, sizeof(HtWH3));
+                        double inv3[4][4];
+                        if (mat4_invert(HtWH3_copy, inv3) != 0) {
+                            fprintf(stderr, "DOPPLER: per-sat re-solve "
+                                    "FAIL - singular matrix\n");
+                            return 0;
+                        }
+
+                        double delta[4] = {0};
+                        for (int i = 0; i < 4; i++)
+                            for (int j = 0; j < 4; j++)
+                                delta[i] += inv3[i][j] * HtWy3[j];
+
+                        rx_ecef[0] += delta[0];
+                        rx_ecef[1] += delta[1];
+                        rx_ecef[2] += delta[2];
+                        clock_drift += delta[3];
+
+                        double correction = sqrt(delta[0]*delta[0] +
+                                                  delta[1]*delta[1] +
+                                                  delta[2]*delta[2]);
+                        if (correction < CONVERGENCE_M) {
+                            converged = 1;
+                            break;
+                        }
+                    }
+
+                    if (!converged) {
+                        if (verbose)
+                            fprintf(stderr, "DOPPLER: per-sat re-solve "
+                                    "FAIL - did not converge\n");
+                        return 0;
+                    }
+                } else {
+                    if (verbose)
+                        fprintf(stderr, "DOPPLER: per-sat screening left "
+                                "too few measurements (%d meas, %d sats)\n",
+                                remaining, sats_used);
+                    return 0;
+                }
+            }
+        }
+    }
+
     /* Compute HDOP from the final solution's covariance */
     int n_total = n_meas + rejected;  /* original array size */
     double hdop = 99.9;
@@ -1066,6 +1281,45 @@ done_collect:
     /* Note: HDOP is reported in the solution for the caller to assess.
      * With few satellite passes (early operation), HDOP can be 100+
      * but the position is still useful for approximate location. */
+
+    /* Solution jump guard: reject solutions that jump too far from
+     * the previous established position. A stationary receiver should
+     * not move >500km between solves. Allow override after 5 consecutive
+     * rejections (the old position was probably wrong). */
+    if (has_prev_solution) {
+        double dx = rx_ecef[0] - prev_ecef[0];
+        double dy = rx_ecef[1] - prev_ecef[1];
+        double dz = rx_ecef[2] - prev_ecef[2];
+        double jump = sqrt(dx*dx + dy*dy + dz*dz);
+
+        if (jump > MAX_SOLUTION_JUMP) {
+            jump_reject_count++;
+            if (jump_reject_count < 5) {
+                if (verbose) {
+                    double jlat, jlon, jalt;
+                    ecef_to_geodetic(rx_ecef, &jlat, &jlon, &jalt);
+                    fprintf(stderr, "DOPPLER: rejecting %.0fkm jump to "
+                            "%.4f,%.4f (reject #%d)\n",
+                            jump / 1000.0, jlat, jlon, jump_reject_count);
+                }
+                /* Return the previous solution instead */
+                ecef_to_geodetic(prev_ecef, &out->lat, &out->lon, &out->alt);
+                out->hdop = hdop;
+                out->n_measurements = n_meas;
+                out->n_satellites = sats_used;
+                out->converged = 1;
+                return 1;
+            } else {
+                if (verbose)
+                    fprintf(stderr, "DOPPLER: accepting jump after %d "
+                            "consecutive rejections (resetting)\n",
+                            jump_reject_count);
+                jump_reject_count = 0;
+            }
+        } else {
+            jump_reject_count = 0;
+        }
+    }
 
     /* Save solution for next iteration */
     prev_ecef[0] = rx_ecef[0];
