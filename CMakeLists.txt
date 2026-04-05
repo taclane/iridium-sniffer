@@ -12,6 +12,17 @@ if(UNIX AND NOT APPLE)
   endif()
 endif()
 
+# Include paths for MacOS/Homebrew
+if(APPLE)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm|ARM|aarch64|AARCH64")
+        link_directories(/opt/homebrew/lib)
+        include_directories(/opt/homebrew/include)
+    else()
+        link_directories(/usr/local/lib)
+        include_directories(/usr/local/include)
+    endif()
+endif()
+
 set(CMAKE_C_FLAGS_DEBUG "-ggdb3 -g3 -O0 -fsanitize=address")
 set(CMAKE_C_FLAGS_MINSIZEREL "-Os")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O3 -ggdb3 -g3")
